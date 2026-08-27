@@ -76,10 +76,19 @@ googleBtn.addEventListener("click", () => {
 showScreen(loadingScreen);
 loadingText.textContent = "Checking your session…";
 
-getRedirectResult(auth).catch((err) => {
-  console.error("Redirect result error:", err);
-  statusNote.textContent = "Sign-in didn't complete. Please try again.";
-});
+getRedirectResult(auth)
+  .then((result) => {
+    if (result && result.user) {
+      statusNote.textContent = "Redirect result: got user " + result.user.email;
+    } else {
+      // No pending redirect — this is normal on a fresh visit/login-screen load.
+      statusNote.textContent = "No redirect result (normal on first load).";
+    }
+  })
+  .catch((err) => {
+    console.error("Redirect result error:", err);
+    statusNote.textContent = "Sign-in error: " + err.code + " — " + err.message;
+  });
 
 // --- Central auth state listener — this is the single source of truth ---
 onAuthStateChanged(auth, (user) => {
@@ -116,4 +125,3 @@ logoutModal.addEventListener("click", (e) => {
     logoutModal.classList.add("hidden");
   }
 });
-
