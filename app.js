@@ -1,14 +1,15 @@
 // GoalSync — app.js
-// Phase 2: Real Firebase Google Sign-In with local persistence.
-// Uses REDIRECT flow (not popup) — popups are unreliable inside mobile
-// browsers/PWAs and were the likely cause of the blank-screen bug.
+// Phase 2 (v2): Switched to POPUP-based Google Sign-In.
+// Redirect-based sign-in was silently losing session state on the way
+// back from Google — a known conflict between Firebase's redirect flow
+// and Chrome's newer cross-site storage partitioning. Popup avoids the
+// full page navigation, so this problem doesn't occur.
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
 import {
   getAuth,
   GoogleAuthProvider,
-  signInWithRedirect,
-  getRedirectResult,
+  signInWithPopup,
   onAuthStateChanged,
   signOut,
   browserLocalPersistence,
@@ -61,36 +62,28 @@ setPersistence(auth, browserLocalPersistence).catch((err) => {
   console.error("Persistence setup failed:", err);
 });
 
-// --- Google Sign-In button ---
+// --- Google Sign-In button (popup-based) ---
 googleBtn.addEventListener("click", () => {
-  statusNote.textContent = "Redirecting to Google…";
-  signInWithRedirect(auth, provider).catch((err) => {
-    console.error("Sign-in redirect failed:", err);
-    statusNote.textContent = "Something went wrong. Please try again.";
-  });
+  statusNote.textContent = "Opening Google sign-in…";
+  googleBtn.disabled = true;
+
+  signInWithPopup(auth, provider)
+    .then((result) => {
+      statusNote.textContent = "Signed in as " + result.user.email;
+      // onAuthStateChanged below will handle showing the home screen
+    })
+    .catch((err) => {
+      console.error("Popup sign-in error:", err);
+      statusNote.textContent = "Sign-in error: " + err.code + " — " + err.message;
+      googleBtn.disabled = false;
+    });
 });
 
-// --- Handle the return trip from Google (after redirect) ---
-// This resolves any pending redirect BEFORE onAuthStateChanged fires,
-// so we don't flash the login screen unnecessarily.
+// --- Central auth state listener — this is the single source of truth ---
+// On initial load this tells us if a session already exists (stay logged in).
 showScreen(loadingScreen);
 loadingText.textContent = "Checking your session…";
 
-getRedirectResult(auth)
-  .then((result) => {
-    if (result && result.user) {
-      statusNote.textContent = "Redirect result: got user " + result.user.email;
-    } else {
-      // No pending redirect — this is normal on a fresh visit/login-screen load.
-      statusNote.textContent = "No redirect result (normal on first load).";
-    }
-  })
-  .catch((err) => {
-    console.error("Redirect result error:", err);
-    statusNote.textContent = "Sign-in error: " + err.code + " — " + err.message;
-  });
-
-// --- Central auth state listener — this is the single source of truth ---
 onAuthStateChanged(auth, (user) => {
   if (user) {
     userName.textContent = user.displayName || "there";
@@ -98,6 +91,7 @@ onAuthStateChanged(auth, (user) => {
     showScreen(homeScreen);
   } else {
     showScreen(loginScreen);
+    googleBtn.disabled = false;
   }
 });
 
@@ -125,3 +119,4 @@ logoutModal.addEventListener("click", (e) => {
     logoutModal.classList.add("hidden");
   }
 });
+  
