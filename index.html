@@ -48,23 +48,101 @@
   </div>
 </div>
 
-<!-- HOME SCREEN (placeholder — full dashboard comes in later phases) -->
-<div class="screen hidden" id="home-screen">
-  <div class="home-wrap">
-    <div class="home-header">
-      <img id="user-photo" class="user-photo" src="" alt="" />
-      <div>
-        <p class="welcome-label">Welcome back</p>
-        <h2 id="user-name">—</h2>
-      </div>
-      <button id="logout-btn" class="icon-btn" aria-label="Log out">⏻</button>
+<!-- APP SHELL (shown once logged in) -->
+<div class="screen hidden" id="app-shell">
+  <div class="app-header">
+    <img id="user-photo" class="user-photo" src="" alt="" />
+    <div>
+      <p class="welcome-label">Welcome back</p>
+      <h2 id="user-name">—</h2>
+    </div>
+    <button id="logout-btn" class="icon-btn" aria-label="Log out">⏻</button>
+  </div>
+
+  <!-- TAB: HOME -->
+  <div class="tab-content" id="tab-home">
+
+    <!-- Sub-state: choose start method -->
+    <div class="tab-view" id="home-choice">
+      <h3 class="section-title">How do you want to get started?</h3>
+      <button class="choice-card" id="choice-own">
+        <span class="choice-emoji">🎯</span>
+        <span class="choice-text">
+          <strong>Make Your Own</strong>
+          <small>Build your own goals &amp; checklist</small>
+        </span>
+      </button>
+      <button class="choice-card" id="choice-referred">
+        <span class="choice-emoji">🤝</span>
+        <span class="choice-text">
+          <strong>Referred by a Friend</strong>
+          <small>Join a checklist a friend made for you</small>
+        </span>
+      </button>
     </div>
 
+    <!-- Sub-state: entering a referral code -->
+    <div class="tab-view hidden" id="home-referred-entry">
+      <button class="back-link" id="referred-back">‹ Back</button>
+      <h3 class="section-title">Enter your friend's referral code</h3>
+      <input type="text" id="referral-input" class="text-input" placeholder="e.g. KABIR-4821" autocapitalize="characters" />
+      <button id="referral-submit" class="btn btn-primary">Submit</button>
+      <p class="note" id="referral-error"></p>
+    </div>
+
+    <!-- Sub-state: "Make Your Own" placeholder -->
+    <div class="tab-view hidden" id="home-own-placeholder">
+      <div class="placeholder-card">
+        <p>🎯 You're set up to build your own checklist.</p>
+        <p class="dim">Task creation arrives in Phase 4.</p>
+      </div>
+      <button class="link-btn" id="own-redo">Change setup</button>
+    </div>
+
+    <!-- Sub-state: connected via referral, placeholder -->
+    <div class="tab-view hidden" id="home-connected-placeholder">
+      <div class="placeholder-card">
+        <p>🤝 Connected with <strong id="connected-friend-name">your friend</strong>!</p>
+        <p class="dim">Your checklist from them arrives in Phase 4.</p>
+      </div>
+      <button class="link-btn" id="connected-redo">Change setup</button>
+    </div>
+
+  </div>
+
+  <!-- TAB: SCOREBOARD -->
+  <div class="tab-content hidden" id="tab-scoreboard">
     <div class="placeholder-card">
-      <p>✅ You're signed in and it stuck — session persistence is working.</p>
-      <p class="dim">Tasks, checklists, friends, and the scoreboard arrive in the next phases.</p>
+      <p>🏆 Scoreboard</p>
+      <p class="dim">Ranked friend comparisons arrive in Phase 6.</p>
     </div>
   </div>
+
+  <!-- TAB: FRIENDS -->
+  <div class="tab-content hidden" id="tab-friends">
+    <div class="placeholder-card">
+      <p>👥 Friends</p>
+      <p class="dim">Your referral code:</p>
+      <p class="referral-code-display" id="my-referral-code">—</p>
+      <p class="dim">Friend management arrives in Phase 6.</p>
+    </div>
+  </div>
+
+  <!-- BOTTOM NAV -->
+  <nav class="bottom-nav">
+    <button class="nav-btn active" data-tab="home">
+      <span class="nav-icon">🏠</span>
+      <span>Home</span>
+    </button>
+    <button class="nav-btn" data-tab="scoreboard">
+      <span class="nav-icon">🏆</span>
+      <span>Scoreboard</span>
+    </button>
+    <button class="nav-btn" data-tab="friends">
+      <span class="nav-icon">👥</span>
+      <span>Friends</span>
+    </button>
+  </nav>
 </div>
 
 <!-- LOGOUT CONFIRMATION MODAL -->
@@ -79,7 +157,18 @@
   </div>
 </div>
 
+<!-- REDO SETUP CONFIRMATION MODAL -->
+<div class="modal-overlay hidden" id="redo-modal">
+  <div class="modal-box">
+    <h3>Change your setup?</h3>
+    <p>You'll be able to pick "Make Your Own" or "Referred by a Friend" again.</p>
+    <div class="modal-actions">
+      <button id="redo-cancel" class="btn btn-ghost">Cancel</button>
+      <button id="redo-confirm" class="btn btn-danger">Change setup</button>
+    </div>
+  </div>
+</div>
+
 <script type="module" src="/app.js"></script>
 </body>
 </html>
-
