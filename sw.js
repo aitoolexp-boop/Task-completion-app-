@@ -1,22 +1,16 @@
 // Service Worker for GoalSync PWA
-// Handles caching of app shell so it installs and opens offline.
-// NOTE: This does NOT cache Firestore data — that's handled by Firebase's
-// own offline persistence (enabled in app.js). This only caches the
-// app's own files (HTML/CSS/JS/icons) so the app *shell* loads offline.
+// v2 — switched to NETWORK-FIRST for app shell files so updates show up
+// immediately instead of being stuck on old cached code. Icons still
+// cache normally since they rarely change.
 
-const CACHE_NAME = "goalsync-shell-v1";
+const CACHE_NAME = "goalsync-shell-v2";
 
 const APP_SHELL = [
-  "/",
-  "/index.html",
-  "/style.css",
-  "/app.js",
-  "/manifest.json",
   "/icon-192.png",
   "/icon-512.png"
 ];
 
-// Install: cache the app shell
+// Install: pre-cache only the rarely-changing assets (icons)
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL))
@@ -24,23 +18,21 @@ self.addEventListener("install", (event) => {
   self.skipWaiting();
 });
 
-// Activate: clean up old caches
+// Activate: delete ALL old caches (including previous versions) so
+// stale HTML/JS can never be served again
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(
-        keys
-          .filter((key) => key !== CACHE_NAME)
-          .map((key) => caches.delete(key))
-      )
-    )
+      Promise.all(keys.map((key) => caches.delete(key)))
+    ).then(() => caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)))
   );
   self.clients.claim();
 });
 
-// Fetch: serve from cache first, fall back to network.
-// Never intercept Firebase/Firestore/Google requests — let those go
-// straight to the network so auth and data sync work correctly.
+// Fetch strategy:
+// - Firebase/Google requests: never intercept, let them go straight through
+// - HTML/JS/CSS (the app shell): NETWORK-FIRST, fall back to cache only if offline
+// - Everything else (icons, images): cache-first
 self.addEventListener("fetch", (event) => {
   const url = event.request.url;
 
@@ -54,23 +46,37 @@ self.addEventListener("fetch", (event) => {
     return; // let the browser handle it normally
   }
 
-  event.respondWith(
-    caches.match(event.request).then((cached) => {
-      if (cached) return cached;
-      return fetch(event.request)
+  const isAppShellFile =
+    event.request.mode === "navigate" ||
+    url.endsWith(".html") ||
+    url.endsWith(".js") ||
+    url.endsWith(".css") ||
+    url.endsWith("/");
+
+  if (isAppShellFile) {
+    // NETWORK-FIRST: always try to get the freshest code.
+    // Only fall back to cache if there's truly no internet.
+    event.respondWith(
+      fetch(event.request)
         .then((response) => {
-          // cache a copy of newly fetched app-shell files
           const copy = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
           return response;
         })
-        .catch(() => {
-          // if offline and not cached, fall back to index.html for navigation
-          if (event.request.mode === "navigate") {
-            return caches.match("/index.html");
-          }
-        });
+        .catch(() => caches.match(event.request).then((cached) => cached || caches.match("/")))
+    );
+    return;
+  }
+
+  // CACHE-FIRST for static assets like icons
+  event.respondWith(
+    caches.match(event.request).then((cached) => {
+      if (cached) return cached;
+      return fetch(event.request).then((response) => {
+        const copy = response.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+        return response;
+      });
     })
   );
 });
-
