@@ -17,6 +17,7 @@
 </head>
 <body>
 
+<!-- LOGIN SCREEN -->
 <div class="screen" id="login-screen">
   <div class="login-card">
     <div class="brand">
@@ -39,6 +40,46 @@
   </div>
 </div>
 
+<!-- LOADING SCREEN (shown briefly during auth checks/redirects only) -->
+<div class="screen hidden" id="loading-screen">
+  <div class="loading-box">
+    <div class="spinner"></div>
+    <p id="loading-text">Checking your session…</p>
+  </div>
+</div>
+
+<!-- HOME SCREEN (placeholder — full dashboard comes in later phases) -->
+<div class="screen hidden" id="home-screen">
+  <div class="home-wrap">
+    <div class="home-header">
+      <img id="user-photo" class="user-photo" src="" alt="" />
+      <div>
+        <p class="welcome-label">Welcome back</p>
+        <h2 id="user-name">—</h2>
+      </div>
+      <button id="logout-btn" class="icon-btn" aria-label="Log out">⏻</button>
+    </div>
+
+    <div class="placeholder-card">
+      <p>✅ You're signed in and it stuck — session persistence is working.</p>
+      <p class="dim">Tasks, checklists, friends, and the scoreboard arrive in the next phases.</p>
+    </div>
+  </div>
+</div>
+
+<!-- LOGOUT CONFIRMATION MODAL -->
+<div class="modal-overlay hidden" id="logout-modal">
+  <div class="modal-box">
+    <h3>Log out?</h3>
+    <p>You'll need to sign in again to see your goals.</p>
+    <div class="modal-actions">
+      <button id="logout-cancel" class="btn btn-ghost">Cancel</button>
+      <button id="logout-confirm" class="btn btn-danger">Log out</button>
+    </div>
+  </div>
+</div>
+
 <script type="module" src="/app.js"></script>
 </body>
 </html>
+
