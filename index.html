@@ -90,22 +90,39 @@
       <p class="note" id="referral-error"></p>
     </div>
 
-    <!-- Sub-state: "Make Your Own" placeholder -->
-    <div class="tab-view hidden" id="home-own-placeholder">
-      <div class="placeholder-card">
-        <p>🎯 You're set up to build your own checklist.</p>
-        <p class="dim">Task creation arrives in Phase 4.</p>
-      </div>
-      <button class="link-btn" id="own-redo">Change setup</button>
-    </div>
+    <!-- Sub-state: real task dashboard (used for both 'own' and 'referred') -->
+    <div class="tab-view hidden" id="home-dashboard">
 
-    <!-- Sub-state: connected via referral, placeholder -->
-    <div class="tab-view hidden" id="home-connected-placeholder">
-      <div class="placeholder-card">
-        <p>🤝 Connected with <strong id="connected-friend-name">your friend</strong>!</p>
-        <p class="dim">Your checklist from them arrives in Phase 4.</p>
+      <div class="progress-card">
+        <div class="progress-row">
+          <div class="progress-stat">
+            <span class="progress-num" id="stat-tasks">0/0</span>
+            <span class="progress-label">Tasks</span>
+          </div>
+          <div class="progress-stat">
+            <span class="progress-num" id="stat-tokens">0</span>
+            <span class="progress-label">Tokens</span>
+          </div>
+          <div class="progress-stat">
+            <span class="progress-num" id="stat-percent">0%</span>
+            <span class="progress-label">Complete</span>
+          </div>
+        </div>
+        <div class="progress-bar-track">
+          <div class="progress-bar-fill" id="progress-bar-fill"></div>
+        </div>
       </div>
-      <button class="link-btn" id="connected-redo">Change setup</button>
+
+      <div class="dashboard-header-row">
+        <h3 class="section-title-inline">Today's Checklist</h3>
+        <button class="link-btn small" id="dashboard-redo">Change setup</button>
+      </div>
+
+      <div id="task-list" class="task-list">
+        <p class="dim empty-state" id="task-empty-state">No tasks yet. Tap + to add one.</p>
+      </div>
+
+      <button class="fab" id="add-task-fab" aria-label="Add task">+</button>
     </div>
 
   </div>
@@ -169,6 +186,64 @@
   </div>
 </div>
 
+<!-- TASK FORM MODAL (add/edit) -->
+<div class="modal-overlay hidden" id="task-modal">
+  <div class="modal-box task-modal-box">
+    <h3 id="task-modal-title">Add Task</h3>
+
+    <label class="form-label">Task name</label>
+    <input type="text" id="task-name" class="text-input" placeholder="e.g. Study Mathematics" style="text-transform:none;" />
+
+    <label class="form-label">Description (optional)</label>
+    <textarea id="task-description" class="text-input textarea" placeholder="Details about this task"></textarea>
+
+    <div class="form-row">
+      <div class="form-col">
+        <label class="form-label">Start date</label>
+        <input type="date" id="task-start" class="text-input" style="text-transform:none;" />
+      </div>
+      <div class="form-col">
+        <label class="form-label">End date</label>
+        <input type="date" id="task-end" class="text-input" style="text-transform:none;" />
+      </div>
+    </div>
+
+    <label class="form-label">Repeat</label>
+    <select id="task-repeat" class="text-input" style="text-transform:none;">
+      <option value="none">Does not repeat</option>
+      <option value="daily">Daily</option>
+      <option value="weekly">Weekly</option>
+    </select>
+
+    <label class="form-label">Category</label>
+    <input type="text" id="task-category" class="text-input" placeholder="e.g. Study, Fitness, Chores" style="text-transform:none;" />
+
+    <label class="form-label">Priority</label>
+    <select id="task-priority" class="text-input" style="text-transform:none;">
+      <option value="easy">Easy</option>
+      <option value="medium">Medium</option>
+      <option value="hard">Hard</option>
+    </select>
+
+    <label class="form-label">Token reward</label>
+    <input type="number" id="task-tokens" class="text-input" placeholder="e.g. 50" min="0" style="text-transform:none;" />
+
+    <label class="checkbox-row">
+      <input type="checkbox" id="task-required" checked />
+      <span>Required (uncheck for optional)</span>
+    </label>
+
+    <p class="note" id="task-form-error"></p>
+
+    <div class="modal-actions">
+      <button id="task-cancel" class="btn btn-ghost">Cancel</button>
+      <button id="task-save" class="btn btn-primary">Save</button>
+    </div>
+    <button class="link-btn danger hidden" id="task-delete">Delete Task</button>
+  </div>
+</div>
+
 <script type="module" src="/app.js"></script>
 </body>
-</html>
+        </html>
+      
