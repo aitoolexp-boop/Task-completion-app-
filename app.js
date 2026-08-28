@@ -611,7 +611,17 @@ logoutCancel.addEventListener("click", () => {
   logoutModal.classList.add("hidden");
 });
 
-logoutConfirm.addEventListener("click", (e) => {
+logoutConfirm.addEventListener("click", () => {
   logoutModal.classList.add("hidden");
-}
-                               });
+  showScreen(loadingScreen);
+  loadingText.textContent = "Logging out…";
+  signOut(auth).catch((err) => {
+    console.error("Sign-out failed:", err);
+  });
+});
+
+logoutModal.addEventListener("click", (e) => {
+  if (e.target === logoutModal) {
+    logoutModal.classList.add("hidden");
+  }
+});
