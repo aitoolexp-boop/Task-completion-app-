@@ -26,8 +26,6 @@ import {
   getDocs,
   onSnapshot,
   serverTimestamp,
-  increment,
-  writeBatch,
   enableIndexedDbPersistence
 } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
 
@@ -223,8 +221,9 @@ async function loadUserProfile(user) {
 function renderHomeForProfile(profile) {
   if (profile.startMethod === "own" || profile.startMethod === "referred") {
     showHomeSubView(homeDashboard);
-    statTokens.textContent = profile.tokens || 0;
+    statTokens.textContent = currentTokenTotal;
     startTaskListener();
+    startTokenListener();
   } else {
     showHomeSubView(homeChoice);
   }
@@ -236,6 +235,7 @@ choiceOwnBtn.addEventListener("click", async () => {
   await updateDoc(doc(db, "users", currentUid), { startMethod: "own" });
   showHomeSubView(homeDashboard);
   startTaskListener();
+  startTokenListener();
 });
 
 // --- Choice: Referred by a Friend ---
@@ -304,6 +304,7 @@ referralSubmit.addEventListener("click", async () => {
 
     showHomeSubView(homeDashboard);
     startTaskListener();
+    startTokenListener();
   } catch (err) {
     console.error("Referral code error:", err);
     referralError.textContent = "Something went wrong. Please try again.";
@@ -405,29 +406,62 @@ function escapeHtml(str) {
 
 async function toggleTaskComplete(task) {
   const newCompleted = !task.completed;
-  const tokenDelta = newCompleted ? (task.tokens || 0) : -(task.tokens || 0);
+  const dayNumber = Math.floor(Date.now() / 86400000);
+  const eventId = `${task.id}_${dayNumber}`;
+  const eventRef = doc(db, "users", currentUid, "tokenEvents", eventId);
 
   try {
-    // Tokens only ever change here — when a task is marked complete or
-    // incomplete. There's no UI anywhere in the app for a user to type in
-    // a token number directly. This batch keeps the task's completed
-    // state and the token balance in sync as one atomic write.
-    const batch = writeBatch(db);
-    batch.update(doc(db, "tasks", task.id), {
-      completed: newCompleted,
-      completedAt: newCompleted ? serverTimestamp() : null
-    });
-    batch.update(doc(db, "users", currentUid), {
-      tokens: increment(tokenDelta)
-    });
-    await batch.commit();
-
-    const freshUser = await getDoc(doc(db, "users", currentUid));
-    statTokens.textContent = freshUser.data().tokens || 0;
+    if (newCompleted) {
+      // Rules verify: this task belongs to me, the token amount matches
+      // the task's configured reward exactly, and it's dated today — a
+      // client can't fabricate a bigger number or backdate an award.
+      await setDoc(eventRef, {
+        taskId: task.id,
+        tokens: task.tokens || 0,
+        dayNumber,
+        createdAt: serverTimestamp()
+      });
+      await updateDoc(doc(db, "tasks", task.id), {
+        completed: true,
+        completedAt: serverTimestamp()
+      });
+    } else {
+      // Un-completing today removes today's ledger entry (and only
+      // today's — you can't erase a previous day's award this way).
+      await deleteDoc(eventRef);
+      await updateDoc(doc(db, "tasks", task.id), {
+        completed: false,
+        completedAt: null
+      });
+    }
   } catch (err) {
     console.error("Toggle complete failed:", err);
-    alert("Couldn't update this task. Please check your connection and try again.");
+    if (newCompleted && err.code === "permission-denied") {
+      alert("This task was already completed today, or something about the reward didn't check out.");
+    } else {
+      alert("Couldn't update this task. Please check your connection and try again.");
+    }
   }
+}
+
+// --- Live token balance: sum of every ledger event, never a single
+// editable field. Starts once we know currentUid. ---
+let tokenEventsUnsubscribe = null;
+let currentTokenTotal = 0;
+
+function startTokenListener() {
+  if (tokenEventsUnsubscribe) tokenEventsUnsubscribe();
+  const q = collection(db, "users", currentUid, "tokenEvents");
+  tokenEventsUnsubscribe = onSnapshot(
+    q,
+    (snap) => {
+      currentTokenTotal = snap.docs.reduce((sum, d) => sum + (d.data().tokens || 0), 0);
+      statTokens.textContent = currentTokenTotal;
+    },
+    (err) => {
+      console.error("Token ledger listener error:", err);
+    }
+  );
 }
 
 function updateProgressStats(todaysTasks) {
@@ -571,6 +605,10 @@ redoConfirm.addEventListener("click", async () => {
     tasksUnsubscribe();
     tasksUnsubscribe = null;
   }
+  if (tokenEventsUnsubscribe) {
+    tokenEventsUnsubscribe();
+    tokenEventsUnsubscribe = null;
+  }
   await updateDoc(doc(db, "users", currentUid), {
     startMethod: null,
     referredBy: null,
@@ -610,6 +648,15 @@ onAuthStateChanged(auth, async (user) => {
     }
   } else {
     currentUid = null;
+    if (tasksUnsubscribe) {
+      tasksUnsubscribe();
+      tasksUnsubscribe = null;
+    }
+    if (tokenEventsUnsubscribe) {
+      tokenEventsUnsubscribe();
+      tokenEventsUnsubscribe = null;
+    }
+    currentTokenTotal = 0;
     showScreen(loginScreen);
     googleBtn.disabled = false;
   }
