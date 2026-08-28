@@ -411,4 +411,230 @@ body {
 
 .nav-icon {
   font-size: 20px;
-  }
+}
+
+/* --- Progress card --- */
+.progress-card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 18px;
+  margin-bottom: 20px;
+}
+
+.progress-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.progress-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.progress-num {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.progress-label {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.progress-bar-track {
+  height: 8px;
+  background: var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 4px;
+  width: 0%;
+  transition: width 0.4s ease;
+}
+
+/* --- Dashboard header row --- */
+.dashboard-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.section-title-inline {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.link-btn.small {
+  margin: 0;
+  font-size: 12px;
+}
+
+.link-btn.danger {
+  color: #dc2626;
+}
+
+/* --- Task list --- */
+.task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 30px 0;
+  font-size: 13px;
+}
+
+.task-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px;
+}
+
+.task-row.completed {
+  opacity: 0.55;
+}
+
+.task-checkbox {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  background: none;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: var(--accent);
+}
+
+.task-checkbox.checked {
+  background: var(--accent);
+  color: #06210f;
+}
+
+.task-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.task-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.task-row.completed .task-name {
+  text-decoration: line-through;
+}
+
+.task-meta {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+
+.task-tag {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 20px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+
+.task-tag.priority-easy { color: #4ade80; }
+.task-tag.priority-medium { color: #facc15; }
+.task-tag.priority-hard { color: #f87171; }
+
+.task-tokens {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+/* --- Floating add button --- */
+.fab {
+  position: fixed;
+  bottom: 90px;
+  right: 20px;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #06210f;
+  font-size: 28px;
+  font-weight: 400;
+  border: none;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+  z-index: 40;
+}
+
+.fab:active {
+  transform: scale(0.94);
+}
+
+/* --- Task form modal --- */
+.task-modal-box {
+  max-width: 420px;
+  max-height: 85dvh;
+  overflow-y: auto;
+  text-align: left;
+}
+
+.task-modal-box h3 {
+  text-align: center;
+  margin-bottom: 16px;
+}
+
+.form-label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+  margin-top: 12px;
+}
+
+.textarea {
+  min-height: 70px;
+  resize: vertical;
+  text-transform: none;
+}
+
+.form-row {
+  display: flex;
+  gap: 10px;
+}
+
+.form-col {
+  flex: 1;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+  font-size: 13px;
+}
+
+.checkbox-row input {
+  width: 18px;
+  height: 18px;
+}
