@@ -1,6 +1,6 @@
 // GoalSync — app.js
-// Phase 3: Firestore user profiles, referral codes, onboarding choice,
-// and the Home / Scoreboard / Friends bottom nav.
+// Phase 4: Real task CRUD (Firestore), task completion, token balance,
+// and the today's-progress dashboard.
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
 import {
@@ -18,11 +18,16 @@ import {
   getDoc,
   setDoc,
   updateDoc,
+  deleteDoc,
+  addDoc,
   collection,
   query,
   where,
   getDocs,
-  serverTimestamp
+  onSnapshot,
+  serverTimestamp,
+  increment,
+  enableIndexedDbPersistence
 } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -38,6 +43,11 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const provider = new GoogleAuthProvider();
+
+// Enable offline persistence (Phase 7 groundwork — harmless to enable now)
+enableIndexedDbPersistence(db).catch((err) => {
+  console.warn("Offline persistence not enabled:", err.code);
+});
 
 // --- DOM references: top-level screens ---
 const loginScreen = document.getElementById("login-screen");
@@ -62,18 +72,41 @@ const navBtns = document.querySelectorAll(".nav-btn");
 // --- DOM references: home sub-views ---
 const homeChoice = document.getElementById("home-choice");
 const homeReferredEntry = document.getElementById("home-referred-entry");
-const homeOwnPlaceholder = document.getElementById("home-own-placeholder");
-const homeConnectedPlaceholder = document.getElementById("home-connected-placeholder");
+const homeDashboard = document.getElementById("home-dashboard");
 const choiceOwnBtn = document.getElementById("choice-own");
 const choiceReferredBtn = document.getElementById("choice-referred");
 const referredBack = document.getElementById("referred-back");
 const referralInput = document.getElementById("referral-input");
 const referralSubmit = document.getElementById("referral-submit");
 const referralError = document.getElementById("referral-error");
-const connectedFriendName = document.getElementById("connected-friend-name");
-const ownRedoBtn = document.getElementById("own-redo");
-const connectedRedoBtn = document.getElementById("connected-redo");
+const dashboardRedoBtn = document.getElementById("dashboard-redo");
 const myReferralCodeEl = document.getElementById("my-referral-code");
+
+// --- DOM references: dashboard / tasks ---
+const statTasks = document.getElementById("stat-tasks");
+const statTokens = document.getElementById("stat-tokens");
+const statPercent = document.getElementById("stat-percent");
+const progressBarFill = document.getElementById("progress-bar-fill");
+const taskListEl = document.getElementById("task-list");
+const taskEmptyState = document.getElementById("task-empty-state");
+const addTaskFab = document.getElementById("add-task-fab");
+
+// --- DOM references: task form modal ---
+const taskModal = document.getElementById("task-modal");
+const taskModalTitle = document.getElementById("task-modal-title");
+const taskNameInput = document.getElementById("task-name");
+const taskDescInput = document.getElementById("task-description");
+const taskStartInput = document.getElementById("task-start");
+const taskEndInput = document.getElementById("task-end");
+const taskRepeatInput = document.getElementById("task-repeat");
+const taskCategoryInput = document.getElementById("task-category");
+const taskPriorityInput = document.getElementById("task-priority");
+const taskTokensInput = document.getElementById("task-tokens");
+const taskRequiredInput = document.getElementById("task-required");
+const taskFormError = document.getElementById("task-form-error");
+const taskCancelBtn = document.getElementById("task-cancel");
+const taskSaveBtn = document.getElementById("task-save");
+const taskDeleteBtn = document.getElementById("task-delete");
 
 // --- Redo setup modal ---
 const redoModal = document.getElementById("redo-modal");
@@ -81,6 +114,9 @@ const redoCancel = document.getElementById("redo-cancel");
 const redoConfirm = document.getElementById("redo-confirm");
 
 let currentUid = null;
+let tasksUnsubscribe = null;
+let currentTasks = [];
+let editingTaskId = null;
 
 function showScreen(screen) {
   [loginScreen, loadingScreen, appShell].forEach((s) => s.classList.add("hidden"));
@@ -88,7 +124,7 @@ function showScreen(screen) {
 }
 
 function showHomeSubView(view) {
-  [homeChoice, homeReferredEntry, homeOwnPlaceholder, homeConnectedPlaceholder].forEach((v) =>
+  [homeChoice, homeReferredEntry, homeDashboard].forEach((v) =>
     v.classList.add("hidden")
   );
   view.classList.remove("hidden");
@@ -184,11 +220,10 @@ async function loadUserProfile(user) {
 }
 
 function renderHomeForProfile(profile) {
-  if (profile.startMethod === "own") {
-    showHomeSubView(homeOwnPlaceholder);
-  } else if (profile.startMethod === "referred") {
-    connectedFriendName.textContent = profile.referredByName || "your friend";
-    showHomeSubView(homeConnectedPlaceholder);
+  if (profile.startMethod === "own" || profile.startMethod === "referred") {
+    showHomeSubView(homeDashboard);
+    statTokens.textContent = profile.tokens || 0;
+    startTaskListener();
   } else {
     showHomeSubView(homeChoice);
   }
@@ -198,7 +233,8 @@ function renderHomeForProfile(profile) {
 choiceOwnBtn.addEventListener("click", async () => {
   if (!currentUid) return;
   await updateDoc(doc(db, "users", currentUid), { startMethod: "own" });
-  showHomeSubView(homeOwnPlaceholder);
+  showHomeSubView(homeDashboard);
+  startTaskListener();
 });
 
 // --- Choice: Referred by a Friend ---
@@ -265,8 +301,8 @@ referralSubmit.addEventListener("click", async () => {
       await updateDoc(friendRef, { friends: [...existingFriends, currentUid] });
     }
 
-    connectedFriendName.textContent = friendData.displayName || "your friend";
-    showHomeSubView(homeConnectedPlaceholder);
+    showHomeSubView(homeDashboard);
+    startTaskListener();
   } catch (err) {
     console.error("Referral code error:", err);
     referralError.textContent = "Something went wrong. Please try again.";
@@ -276,14 +312,236 @@ referralSubmit.addEventListener("click", async () => {
   referralSubmit.textContent = "Submit";
 });
 
+// ============================================================
+// TASK MANAGEMENT (Phase 4)
+// ============================================================
+
+function todayStr() {
+  const d = new Date();
+  return d.toISOString().slice(0, 10); // YYYY-MM-DD
+}
+
+// A task is "active today" if today falls within its start/end range
+// (inclusive). If no end date, it's active from start date onward.
+function isTaskActiveToday(task) {
+  const today = todayStr();
+  if (task.startDate && today < task.startDate) return false;
+  if (task.endDate && today > task.endDate) return false;
+  return true;
+}
+
+function startTaskListener() {
+  if (tasksUnsubscribe) tasksUnsubscribe(); // avoid duplicate listeners
+  const q = query(collection(db, "tasks"), where("ownerUid", "==", currentUid));
+  tasksUnsubscribe = onSnapshot(
+    q,
+    (snap) => {
+      currentTasks = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      renderTaskList();
+    },
+    (err) => {
+      console.error("Task listener error:", err);
+    }
+  );
+}
+
+function renderTaskList() {
+  const todaysTasks = currentTasks.filter(isTaskActiveToday);
+
+  taskListEl.querySelectorAll(".task-row").forEach((el) => el.remove());
+
+  if (todaysTasks.length === 0) {
+    taskEmptyState.classList.remove("hidden");
+  } else {
+    taskEmptyState.classList.add("hidden");
+    todaysTasks
+      .sort((a, b) => (a.completed === b.completed ? 0 : a.completed ? 1 : -1))
+      .forEach((task) => taskListEl.appendChild(buildTaskRow(task)));
+  }
+
+  updateProgressStats(todaysTasks);
+}
+
+function buildTaskRow(task) {
+  const row = document.createElement("div");
+  row.className = "task-row" + (task.completed ? " completed" : "");
+
+  const checkbox = document.createElement("button");
+  checkbox.className = "task-checkbox" + (task.completed ? " checked" : "");
+  checkbox.innerHTML = task.completed ? "✓" : "";
+  checkbox.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleTaskComplete(task);
+  });
+
+  const info = document.createElement("div");
+  info.className = "task-info";
+  info.innerHTML = `
+    <div class="task-name">${escapeHtml(task.name)}</div>
+    <div class="task-meta">
+      ${task.category ? `<span class="task-tag">${escapeHtml(task.category)}</span>` : ""}
+      <span class="task-tag priority-${task.priority}">${task.priority}</span>
+      ${task.required ? `<span class="task-tag">Required</span>` : `<span class="task-tag">Optional</span>`}
+    </div>
+  `;
+  info.addEventListener("click", () => openTaskModal(task));
+
+  const tokens = document.createElement("div");
+  tokens.className = "task-tokens";
+  tokens.textContent = `+${task.tokens || 0}`;
+
+  row.appendChild(checkbox);
+  row.appendChild(info);
+  row.appendChild(tokens);
+  return row;
+}
+
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str || "";
+  return div.innerHTML;
+}
+
+async function toggleTaskComplete(task) {
+  const newCompleted = !task.completed;
+  const tokenDelta = newCompleted ? (task.tokens || 0) : -(task.tokens || 0);
+
+  try {
+    await updateDoc(doc(db, "tasks", task.id), {
+      completed: newCompleted,
+      completedAt: newCompleted ? serverTimestamp() : null
+    });
+    // NOTE: token balance is updated client-side for now. Phase 5 moves
+    // this to a secured Cloud Function so balances can't be tampered with.
+    await updateDoc(doc(db, "users", currentUid), {
+      tokens: increment(tokenDelta)
+    });
+    const freshUser = await getDoc(doc(db, "users", currentUid));
+    statTokens.textContent = freshUser.data().tokens || 0;
+  } catch (err) {
+    console.error("Toggle complete failed:", err);
+  }
+}
+
+function updateProgressStats(todaysTasks) {
+  const total = todaysTasks.length;
+  const done = todaysTasks.filter((t) => t.completed).length;
+  const percent = total > 0 ? Math.round((done / total) * 100) : 0;
+
+  statTasks.textContent = `${done}/${total}`;
+  statPercent.textContent = `${percent}%`;
+  progressBarFill.style.width = `${percent}%`;
+}
+
+// --- Task form: open for add or edit ---
+function openTaskModal(task) {
+  editingTaskId = task ? task.id : null;
+  taskFormError.textContent = "";
+
+  if (task) {
+    taskModalTitle.textContent = "Edit Task";
+    taskNameInput.value = task.name || "";
+    taskDescInput.value = task.description || "";
+    taskStartInput.value = task.startDate || "";
+    taskEndInput.value = task.endDate || "";
+    taskRepeatInput.value = task.repeat || "none";
+    taskCategoryInput.value = task.category || "";
+    taskPriorityInput.value = task.priority || "medium";
+    taskTokensInput.value = task.tokens || 0;
+    taskRequiredInput.checked = task.required !== false;
+    taskDeleteBtn.classList.remove("hidden");
+  } else {
+    taskModalTitle.textContent = "Add Task";
+    taskNameInput.value = "";
+    taskDescInput.value = "";
+    taskStartInput.value = todayStr();
+    taskEndInput.value = "";
+    taskRepeatInput.value = "none";
+    taskCategoryInput.value = "";
+    taskPriorityInput.value = "medium";
+    taskTokensInput.value = 10;
+    taskRequiredInput.checked = true;
+    taskDeleteBtn.classList.add("hidden");
+  }
+
+  taskModal.classList.remove("hidden");
+}
+
+addTaskFab.addEventListener("click", () => openTaskModal(null));
+
+taskCancelBtn.addEventListener("click", () => {
+  taskModal.classList.add("hidden");
+});
+
+taskModal.addEventListener("click", (e) => {
+  if (e.target === taskModal) taskModal.classList.add("hidden");
+});
+
+taskSaveBtn.addEventListener("click", async () => {
+  const name = taskNameInput.value.trim();
+  if (!name) {
+    taskFormError.textContent = "Task name is required.";
+    return;
+  }
+  const startDate = taskStartInput.value;
+  const endDate = taskEndInput.value;
+  if (startDate && endDate && endDate < startDate) {
+    taskFormError.textContent = "End date can't be before start date.";
+    return;
+  }
+
+  const taskData = {
+    ownerUid: currentUid,
+    name,
+    description: taskDescInput.value.trim(),
+    startDate: startDate || todayStr(),
+    endDate: endDate || null,
+    repeat: taskRepeatInput.value,
+    category: taskCategoryInput.value.trim(),
+    priority: taskPriorityInput.value,
+    tokens: parseInt(taskTokensInput.value, 10) || 0,
+    required: taskRequiredInput.checked
+  };
+
+  taskSaveBtn.disabled = true;
+  taskSaveBtn.textContent = "Saving…";
+
+  try {
+    if (editingTaskId) {
+      await updateDoc(doc(db, "tasks", editingTaskId), taskData);
+    } else {
+      await addDoc(collection(db, "tasks"), {
+        ...taskData,
+        completed: false,
+        completedAt: null,
+        createdAt: serverTimestamp()
+      });
+    }
+    taskModal.classList.add("hidden");
+  } catch (err) {
+    console.error("Task save failed:", err);
+    taskFormError.textContent = "Something went wrong saving this task.";
+  }
+
+  taskSaveBtn.disabled = false;
+  taskSaveBtn.textContent = "Save";
+});
+
+taskDeleteBtn.addEventListener("click", async () => {
+  if (!editingTaskId) return;
+  try {
+    await deleteDoc(doc(db, "tasks", editingTaskId));
+    taskModal.classList.add("hidden");
+  } catch (err) {
+    console.error("Task delete failed:", err);
+    taskFormError.textContent = "Couldn't delete this task. Try again.";
+  }
+});
+
 // --- Redo setup (available from Home even after setup) ---
 let pendingRedo = false;
 
-ownRedoBtn.addEventListener("click", () => {
-  pendingRedo = true;
-  redoModal.classList.remove("hidden");
-});
-connectedRedoBtn.addEventListener("click", () => {
+dashboardRedoBtn.addEventListener("click", () => {
   pendingRedo = true;
   redoModal.classList.remove("hidden");
 });
@@ -296,6 +554,10 @@ redoCancel.addEventListener("click", () => {
 redoConfirm.addEventListener("click", async () => {
   redoModal.classList.add("hidden");
   if (!pendingRedo || !currentUid) return;
+  if (tasksUnsubscribe) {
+    tasksUnsubscribe();
+    tasksUnsubscribe = null;
+  }
   await updateDoc(doc(db, "users", currentUid), {
     startMethod: null,
     referredBy: null,
@@ -349,18 +611,7 @@ logoutCancel.addEventListener("click", () => {
   logoutModal.classList.add("hidden");
 });
 
-logoutConfirm.addEventListener("click", () => {
+logoutConfirm.addEventListener("click", (e) => {
   logoutModal.classList.add("hidden");
-  showScreen(loadingScreen);
-  loadingText.textContent = "Logging out…";
-  signOut(auth).catch((err) => {
-    console.error("Sign-out failed:", err);
-  });
-});
-
-logoutModal.addEventListener("click", (e) => {
-  if (e.target === logoutModal) {
-    logoutModal.classList.add("hidden");
-  }
-});
-    
+}
+                               });
