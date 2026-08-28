@@ -27,6 +27,7 @@ import {
   onSnapshot,
   serverTimestamp,
   increment,
+  writeBatch,
   enableIndexedDbPersistence
 } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
 
@@ -407,19 +408,25 @@ async function toggleTaskComplete(task) {
   const tokenDelta = newCompleted ? (task.tokens || 0) : -(task.tokens || 0);
 
   try {
-    await updateDoc(doc(db, "tasks", task.id), {
+    // Tokens only ever change here — when a task is marked complete or
+    // incomplete. There's no UI anywhere in the app for a user to type in
+    // a token number directly. This batch keeps the task's completed
+    // state and the token balance in sync as one atomic write.
+    const batch = writeBatch(db);
+    batch.update(doc(db, "tasks", task.id), {
       completed: newCompleted,
       completedAt: newCompleted ? serverTimestamp() : null
     });
-    // NOTE: token balance is updated client-side for now. Phase 5 moves
-    // this to a secured Cloud Function so balances can't be tampered with.
-    await updateDoc(doc(db, "users", currentUid), {
+    batch.update(doc(db, "users", currentUid), {
       tokens: increment(tokenDelta)
     });
+    await batch.commit();
+
     const freshUser = await getDoc(doc(db, "users", currentUid));
     statTokens.textContent = freshUser.data().tokens || 0;
   } catch (err) {
     console.error("Toggle complete failed:", err);
+    alert("Couldn't update this task. Please check your connection and try again.");
   }
 }
 
@@ -490,6 +497,12 @@ taskSaveBtn.addEventListener("click", async () => {
     return;
   }
 
+  const tokensValue = parseInt(taskTokensInput.value, 10) || 0;
+  if (tokensValue < 0) {
+    taskFormError.textContent = "Token reward can't be negative.";
+    return;
+  }
+
   const taskData = {
     ownerUid: currentUid,
     name,
@@ -499,7 +512,7 @@ taskSaveBtn.addEventListener("click", async () => {
     repeat: taskRepeatInput.value,
     category: taskCategoryInput.value.trim(),
     priority: taskPriorityInput.value,
-    tokens: parseInt(taskTokensInput.value, 10) || 0,
+    tokens: tokensValue,
     required: taskRequiredInput.checked
   };
 
