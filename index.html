@@ -129,7 +129,7 @@
 
   <!-- TAB: SCOREBOARD -->
   <div class="tab-content hidden" id="tab-scoreboard">
-    <h3 class="section-title">🏆 Scoreboard</h3>
+    <h3 class="section-title-inline" style="margin-bottom:16px;">🏆 Scoreboard</h3>
     <div id="scoreboard-list" class="scoreboard-list">
       <p class="dim empty-state" id="scoreboard-empty">Connect a friend to see the scoreboard.</p>
     </div>
@@ -137,26 +137,13 @@
 
   <!-- TAB: FRIENDS -->
   <div class="tab-content hidden" id="tab-friends">
-    <h3 class="section-title">👥 Friends</h3>
-
-    <div class="placeholder-card" style="text-align:center; margin-bottom:20px;">
-      <p class="dim">Your referral code</p>
+    <div class="placeholder-card" style="margin-bottom:16px;">
+      <p class="dim">Your referral code — share it with friends:</p>
       <p class="referral-code-display" id="my-referral-code">—</p>
     </div>
-
-    <div class="dashboard-header-row">
-      <h4 class="section-title-inline">Connected Friends</h4>
-      <button class="link-btn small" id="add-friend-toggle">+ Add</button>
-    </div>
-
-    <div class="tab-view hidden" id="add-friend-entry" style="margin-bottom:16px;">
-      <input type="text" id="add-friend-input" class="text-input" placeholder="Friend's referral code" autocapitalize="characters" />
-      <button id="add-friend-submit" class="btn btn-primary">Add Friend</button>
-      <p class="note" id="add-friend-error"></p>
-    </div>
-
-    <div id="friends-list" class="task-list">
-      <p class="dim empty-state" id="friends-empty-state">No friends connected yet.</p>
+    <h3 class="section-title-inline" style="margin-bottom:14px;">Your Friends</h3>
+    <div id="friend-list" class="friend-list">
+      <p class="dim empty-state" id="friend-list-empty">No friends connected yet. Share your code, or use a friend's code from the Home tab.</p>
     </div>
   </div>
 
@@ -175,6 +162,55 @@
       <span>Friends</span>
     </button>
   </nav>
+</div>
+
+<!-- FRIEND DASHBOARD OVERLAY -->
+<div class="screen hidden" id="friend-dashboard-screen">
+  <div class="app-header">
+    <button class="back-link" id="friend-dashboard-back" style="margin:0;">‹ Back</button>
+  </div>
+  <div class="tab-content">
+    <div class="compare-row">
+      <div class="compare-card">
+        <img id="fd-you-photo" class="user-photo" src="" alt="" />
+        <p class="compare-name">You</p>
+        <p class="compare-tokens" id="fd-you-tokens">0</p>
+        <p class="dim">tokens</p>
+      </div>
+      <div class="compare-vs">VS</div>
+      <div class="compare-card">
+        <img id="fd-friend-photo" class="user-photo" src="" alt="" />
+        <p class="compare-name" id="fd-friend-name">Friend</p>
+        <p class="compare-tokens" id="fd-friend-tokens">0</p>
+        <p class="dim">tokens</p>
+      </div>
+    </div>
+
+    <div class="stat-list">
+      <div class="stat-list-row">
+        <span>Tasks completed (all time)</span>
+        <span id="fd-you-completed">0</span>
+        <span id="fd-friend-completed">0</span>
+      </div>
+      <div class="stat-list-row">
+        <span>Completed today</span>
+        <span id="fd-you-today">0</span>
+        <span id="fd-friend-today">0</span>
+      </div>
+      <div class="stat-list-row">
+        <span>Today's completion %</span>
+        <span id="fd-you-percent">0%</span>
+        <span id="fd-friend-percent">0%</span>
+      </div>
+      <div class="stat-list-row">
+        <span>Current streak</span>
+        <span id="fd-you-streak">0</span>
+        <span id="fd-friend-streak">0</span>
+      </div>
+    </div>
+
+    <button class="link-btn danger" id="friend-remove-btn">Remove this friend</button>
+  </div>
 </div>
 
 <!-- LOGOUT CONFIRMATION MODAL -->
@@ -197,6 +233,18 @@
     <div class="modal-actions">
       <button id="redo-cancel" class="btn btn-ghost">Cancel</button>
       <button id="redo-confirm" class="btn btn-danger">Change setup</button>
+    </div>
+  </div>
+</div>
+
+<!-- REMOVE FRIEND CONFIRMATION MODAL -->
+<div class="modal-overlay hidden" id="remove-friend-modal">
+  <div class="modal-box">
+    <h3>Remove this friend?</h3>
+    <p>You'll both stop seeing each other's progress and scoreboard.</p>
+    <div class="modal-actions">
+      <button id="remove-friend-cancel" class="btn btn-ghost">Cancel</button>
+      <button id="remove-friend-confirm" class="btn btn-danger">Remove</button>
     </div>
   </div>
 </div>
@@ -255,18 +303,6 @@
       <button id="task-save" class="btn btn-primary">Save</button>
     </div>
     <button class="link-btn danger hidden" id="task-delete">Delete Task</button>
-  </div>
-</div>
-
-<!-- REMOVE FRIEND CONFIRMATION MODAL -->
-<div class="modal-overlay hidden" id="remove-friend-modal">
-  <div class="modal-box">
-    <h3>Remove this friend?</h3>
-    <p id="remove-friend-name">You'll stop seeing each other's progress and scoreboard.</p>
-    <div class="modal-actions">
-      <button id="remove-friend-cancel" class="btn btn-ghost">Cancel</button>
-      <button id="remove-friend-confirm" class="btn btn-danger">Remove</button>
-    </div>
   </div>
 </div>
 

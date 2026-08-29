@@ -26,8 +26,6 @@ import {
   getDocs,
   onSnapshot,
   serverTimestamp,
-  arrayUnion,
-  arrayRemove,
   enableIndexedDbPersistence
 } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
 
@@ -82,19 +80,6 @@ const referralSubmit = document.getElementById("referral-submit");
 const referralError = document.getElementById("referral-error");
 const dashboardRedoBtn = document.getElementById("dashboard-redo");
 const myReferralCodeEl = document.getElementById("my-referral-code");
-const scoreboardList = document.getElementById("scoreboard-list");
-const scoreboardEmpty = document.getElementById("scoreboard-empty");
-const addFriendToggle = document.getElementById("add-friend-toggle");
-const addFriendEntry = document.getElementById("add-friend-entry");
-const addFriendInput = document.getElementById("add-friend-input");
-const addFriendSubmit = document.getElementById("add-friend-submit");
-const addFriendError = document.getElementById("add-friend-error");
-const friendsList = document.getElementById("friends-list");
-const friendsEmptyState = document.getElementById("friends-empty-state");
-const removeFriendModal = document.getElementById("remove-friend-modal");
-const removeFriendName = document.getElementById("remove-friend-name");
-const removeFriendCancel = document.getElementById("remove-friend-cancel");
-const removeFriendConfirm = document.getElementById("remove-friend-confirm");
 
 // --- DOM references: dashboard / tasks ---
 const statTasks = document.getElementById("stat-tasks");
@@ -127,13 +112,40 @@ const redoModal = document.getElementById("redo-modal");
 const redoCancel = document.getElementById("redo-cancel");
 const redoConfirm = document.getElementById("redo-confirm");
 
+// --- DOM references: Phase 6 (scoreboard, friends, friend dashboard) ---
+const scoreboardListEl = document.getElementById("scoreboard-list");
+const scoreboardEmpty = document.getElementById("scoreboard-empty");
+const friendListEl = document.getElementById("friend-list");
+const friendListEmpty = document.getElementById("friend-list-empty");
+const friendDashboardScreen = document.getElementById("friend-dashboard-screen");
+const friendDashboardBack = document.getElementById("friend-dashboard-back");
+const fdYouPhoto = document.getElementById("fd-you-photo");
+const fdYouTokens = document.getElementById("fd-you-tokens");
+const fdFriendPhoto = document.getElementById("fd-friend-photo");
+const fdFriendName = document.getElementById("fd-friend-name");
+const fdFriendTokens = document.getElementById("fd-friend-tokens");
+const fdYouCompleted = document.getElementById("fd-you-completed");
+const fdFriendCompleted = document.getElementById("fd-friend-completed");
+const fdYouToday = document.getElementById("fd-you-today");
+const fdFriendToday = document.getElementById("fd-friend-today");
+const fdYouPercent = document.getElementById("fd-you-percent");
+const fdFriendPercent = document.getElementById("fd-friend-percent");
+const fdYouStreak = document.getElementById("fd-you-streak");
+const fdFriendStreak = document.getElementById("fd-friend-streak");
+const friendRemoveBtn = document.getElementById("friend-remove-btn");
+const removeFriendModal = document.getElementById("remove-friend-modal");
+const removeFriendCancel = document.getElementById("remove-friend-cancel");
+const removeFriendConfirm = document.getElementById("remove-friend-confirm");
+
 let currentUid = null;
+let currentUserProfile = null;
 let tasksUnsubscribe = null;
 let currentTasks = [];
 let editingTaskId = null;
+let viewingFriendUid = null;
 
 function showScreen(screen) {
-  [loginScreen, loadingScreen, appShell].forEach((s) => s.classList.add("hidden"));
+  [loginScreen, loadingScreen, appShell, friendDashboardScreen].forEach((s) => s.classList.add("hidden"));
   screen.classList.remove("hidden");
 }
 
@@ -152,8 +164,10 @@ function switchTab(tabName) {
     tabHome.classList.remove("hidden");
   } else if (tabName === "scoreboard") {
     tabScoreboard.classList.remove("hidden");
+    renderScoreboard();
   } else if (tabName === "friends") {
     tabFriends.classList.remove("hidden");
+    renderFriendsList();
   }
 
   document.querySelector(`.nav-btn[data-tab="${tabName}"]`).classList.add("active");
@@ -230,16 +244,15 @@ async function loadUserProfile(user) {
   }
 
   myReferralCodeEl.textContent = profile.referralCode || "—";
+  currentUserProfile = profile;
   renderHomeForProfile(profile);
 }
 
 function renderHomeForProfile(profile) {
   if (profile.startMethod === "own" || profile.startMethod === "referred") {
     showHomeSubView(homeDashboard);
-    statTokens.textContent = currentTokenTotal;
+    statTokens.textContent = "…"; // the token ledger listener fills this in
     startTaskListener();
-    startTokenListener();
-    startFriendNetworkListeners();
   } else {
     showHomeSubView(homeChoice);
   }
@@ -251,8 +264,6 @@ choiceOwnBtn.addEventListener("click", async () => {
   await updateDoc(doc(db, "users", currentUid), { startMethod: "own" });
   showHomeSubView(homeDashboard);
   startTaskListener();
-  startTokenListener();
-  startFriendNetworkListeners();
 });
 
 // --- Choice: Referred by a Friend ---
@@ -310,16 +321,17 @@ referralSubmit.addEventListener("click", async () => {
 
     // Add each other to a simple "friends" array on both profiles
     await updateDoc(doc(db, "users", currentUid), {
-      friends: arrayUnion(friendUid)
+      friends: [friendUid]
     });
-    await updateDoc(doc(db, "users", friendUid), {
-      friends: arrayUnion(currentUid)
-    });
+    const friendRef = doc(db, "users", friendUid);
+    const friendSnap = await getDoc(friendRef);
+    const existingFriends = (friendSnap.data().friends) || [];
+    if (!existingFriends.includes(currentUid)) {
+      await updateDoc(friendRef, { friends: [...existingFriends, currentUid] });
+    }
 
     showHomeSubView(homeDashboard);
     startTaskListener();
-    startTokenListener();
-    startFriendNetworkListeners();
   } catch (err) {
     console.error("Referral code error:", err);
     referralError.textContent = "Something went wrong. Please try again.";
@@ -330,12 +342,24 @@ referralSubmit.addEventListener("click", async () => {
 });
 
 // ============================================================
-// TASK MANAGEMENT (Phase 4)
+// TASK MANAGEMENT (Phase 4, updated for the token ledger — see
+// firestore.rules). Completion is no longer a permanent true/false
+// on the task itself — it's a per-day ledger entry under
+// users/{uid}/tokenEvents/{taskId_dayNumber}. This is what lets a
+// repeating (daily) task be completed fresh each day, and it's what
+// makes the token balance provably tied to real completions.
 // ============================================================
 
 function todayStr() {
   const d = new Date();
   return d.toISOString().slice(0, 10); // YYYY-MM-DD
+}
+
+// Must match the server's day-number logic in firestore.rules
+// (int(request.time.toMillis() / 86400000)) so a completion made
+// "today" on the client is accepted as "today" by the rules.
+function todayDayNumber() {
+  return Math.floor(Date.now() / 86400000);
 }
 
 // A task is "active today" if today falls within its start/end range
@@ -347,8 +371,12 @@ function isTaskActiveToday(task) {
   return true;
 }
 
+let completedTodaySet = new Set();     // taskIds completed today (from ledger)
+let currentTokenBalance = 0;           // all-time sum from ledger
+let tokenEventsUnsubscribe = null;
+
 function startTaskListener() {
-  if (tasksUnsubscribe) tasksUnsubscribe(); // avoid duplicate listeners
+  if (tasksUnsubscribe) tasksUnsubscribe();
   const q = query(collection(db, "tasks"), where("ownerUid", "==", currentUid));
   tasksUnsubscribe = onSnapshot(
     q,
@@ -356,10 +384,34 @@ function startTaskListener() {
       currentTasks = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       renderTaskList();
     },
-    (err) => {
-      console.error("Task listener error:", err);
-    }
+    (err) => console.error("Task listener error:", err)
   );
+
+  if (tokenEventsUnsubscribe) tokenEventsUnsubscribe();
+  const eventsRef = collection(db, "users", currentUid, "tokenEvents");
+  tokenEventsUnsubscribe = onSnapshot(
+    eventsRef,
+    (snap) => {
+      const today = todayDayNumber();
+      let total = 0;
+      const todaySet = new Set();
+      snap.docs.forEach((d) => {
+        const data = d.data();
+        total += data.tokens || 0;
+        if (data.dayNumber === today) todaySet.add(data.taskId);
+      });
+      currentTokenBalance = total;
+      completedTodaySet = todaySet;
+      statTokens.textContent = currentTokenBalance;
+      renderTaskList();
+    },
+    (err) => console.error("Token ledger listener error:", err)
+  );
+}
+
+function stopTaskListeners() {
+  if (tasksUnsubscribe) { tasksUnsubscribe(); tasksUnsubscribe = null; }
+  if (tokenEventsUnsubscribe) { tokenEventsUnsubscribe(); tokenEventsUnsubscribe = null; }
 }
 
 function renderTaskList() {
@@ -372,7 +424,11 @@ function renderTaskList() {
   } else {
     taskEmptyState.classList.add("hidden");
     todaysTasks
-      .sort((a, b) => (a.completed === b.completed ? 0 : a.completed ? 1 : -1))
+      .sort((a, b) => {
+        const aDone = completedTodaySet.has(a.id);
+        const bDone = completedTodaySet.has(b.id);
+        return aDone === bDone ? 0 : aDone ? 1 : -1;
+      })
       .forEach((task) => taskListEl.appendChild(buildTaskRow(task)));
   }
 
@@ -380,12 +436,14 @@ function renderTaskList() {
 }
 
 function buildTaskRow(task) {
+  const doneToday = completedTodaySet.has(task.id);
+
   const row = document.createElement("div");
-  row.className = "task-row" + (task.completed ? " completed" : "");
+  row.className = "task-row" + (doneToday ? " completed" : "");
 
   const checkbox = document.createElement("button");
-  checkbox.className = "task-checkbox" + (task.completed ? " checked" : "");
-  checkbox.innerHTML = task.completed ? "✓" : "";
+  checkbox.className = "task-checkbox" + (doneToday ? " checked" : "");
+  checkbox.innerHTML = doneToday ? "✓" : "";
   checkbox.addEventListener("click", (e) => {
     e.stopPropagation();
     toggleTaskComplete(task);
@@ -420,355 +478,45 @@ function escapeHtml(str) {
 }
 
 async function toggleTaskComplete(task) {
-  const newCompleted = !task.completed;
-  const dayNumber = Math.floor(Date.now() / 86400000);
-  const eventId = `${task.id}_${dayNumber}`;
+  const dayNum = todayDayNumber();
+  const eventId = `${task.id}_${dayNum}`;
   const eventRef = doc(db, "users", currentUid, "tokenEvents", eventId);
+  const alreadyDoneToday = completedTodaySet.has(task.id);
 
   try {
-    if (newCompleted) {
-      // Rules verify: this task belongs to me, the token amount matches
-      // the task's configured reward exactly, and it's dated today — a
-      // client can't fabricate a bigger number or backdate an award.
+    if (alreadyDoneToday) {
+      // Un-complete: remove today's ledger entry. This is the only
+      // way tokens go down — deleting a real, previously-earned event.
+      await deleteDoc(eventRef);
+    } else {
+      // Complete: create today's ledger entry. The security rules
+      // verify the task exists, belongs to you, the token amount
+      // matches the task's configured reward, and the date is today —
+      // and since the doc ID is deterministic (taskId_dayNumber),
+      // trying to "complete" the same task twice today is impossible;
+      // the second attempt just fails as a duplicate.
       await setDoc(eventRef, {
         taskId: task.id,
+        dayNumber: dayNum,
         tokens: task.tokens || 0,
-        dayNumber,
         createdAt: serverTimestamp()
       });
-      await updateDoc(doc(db, "tasks", task.id), {
-        completed: true,
-        completedAt: serverTimestamp()
-      });
-    } else {
-      // Un-completing today removes today's ledger entry (and only
-      // today's — you can't erase a previous day's award this way).
-      await deleteDoc(eventRef);
-      await updateDoc(doc(db, "tasks", task.id), {
-        completed: false,
-        completedAt: null
-      });
     }
+    // Best-effort UI cache on the task itself (not the source of truth —
+    // the ledger above is). Fine if this fails; ledger listener will
+    // still update the real state.
+    updateDoc(doc(db, "tasks", task.id), {
+      completedAt: alreadyDoneToday ? null : serverTimestamp()
+    }).catch(() => {});
   } catch (err) {
     console.error("Toggle complete failed:", err);
-    if (newCompleted && err.code === "permission-denied") {
-      alert("This task was already completed today, or something about the reward didn't check out.");
-    } else {
-      alert("Couldn't update this task. Please check your connection and try again.");
-    }
+    alert("Couldn't update this task. Please check your connection and try again.");
   }
 }
-
-// --- Live token balance: sum of every ledger event, never a single
-// editable field. Starts once we know currentUid. ---
-let tokenEventsUnsubscribe = null;
-let currentTokenTotal = 0;
-
-function startTokenListener() {
-  if (tokenEventsUnsubscribe) tokenEventsUnsubscribe();
-  const q = collection(db, "users", currentUid, "tokenEvents");
-  tokenEventsUnsubscribe = onSnapshot(
-    q,
-    (snap) => {
-      currentTokenTotal = snap.docs.reduce((sum, d) => sum + (d.data().tokens || 0), 0);
-      statTokens.textContent = currentTokenTotal;
-    },
-    (err) => {
-      console.error("Token ledger listener error:", err);
-    }
-  );
-}
-
-// ============================================================
-// FRIEND NETWORK: live stats for yourself + every connected friend,
-// powering both the Scoreboard tab and the Friends tab. (Phase 6)
-// ============================================================
-
-let friendsDocUnsubscribe = null;
-let statSubs = {}; // uid -> { profileUnsub, tasksUnsub, tokensUnsub }
-let networkStats = {}; // uid -> { name, photo, tokens, tasksCompleted, tasksTotal, streak, weeklyTokens }
-
-function todayDayNumber() {
-  return Math.floor(Date.now() / 86400000);
-}
-
-// Streak = consecutive days with at least one completed task, counting
-// backward from today. If today has no completion yet, we still count
-// the streak as "alive" starting from yesterday, so it doesn't zero out
-// the moment the clock rolls over before you've had a chance to check in.
-function computeStreak(dayNumberSet) {
-  const today = todayDayNumber();
-  let cursor = dayNumberSet.has(today) ? today : today - 1;
-  let streak = 0;
-  while (dayNumberSet.has(cursor)) {
-    streak++;
-    cursor--;
-  }
-  return streak;
-}
-
-function ensureStatsEntry(uid) {
-  if (!networkStats[uid]) {
-    networkStats[uid] = {
-      name: uid === currentUid ? "You" : "Friend",
-      photo: "",
-      tokens: 0,
-      tasksCompleted: 0,
-      tasksTotal: 0,
-      streak: 0,
-      weeklyTokens: 0
-    };
-  }
-  return networkStats[uid];
-}
-
-function subscribeToUserStats(uid) {
-  if (statSubs[uid]) return; // already subscribed
-  ensureStatsEntry(uid);
-
-  const profileUnsub = onSnapshot(doc(db, "users", uid), (snap) => {
-    const d = snap.data() || {};
-    const entry = ensureStatsEntry(uid);
-    entry.name = uid === currentUid ? "You" : (d.displayName || "Friend");
-    entry.photo = d.photoURL || "";
-    renderFriendNetwork();
-  });
-
-  const tasksUnsub = onSnapshot(
-    query(collection(db, "tasks"), where("ownerUid", "==", uid)),
-    (snap) => {
-      let total = 0;
-      let completed = 0;
-      snap.forEach((d) => {
-        total++;
-        if (d.data().completed) completed++;
-      });
-      const entry = ensureStatsEntry(uid);
-      entry.tasksTotal = total;
-      entry.tasksCompleted = completed;
-      renderFriendNetwork();
-    }
-  );
-
-  const tokensUnsub = onSnapshot(
-    collection(db, "users", uid, "tokenEvents"),
-    (snap) => {
-      let tokens = 0;
-      let weekly = 0;
-      const days = new Set();
-      const today = todayDayNumber();
-      snap.forEach((d) => {
-        const v = d.data();
-        tokens += v.tokens || 0;
-        days.add(v.dayNumber);
-        if (v.dayNumber >= today - 6) weekly += v.tokens || 0;
-      });
-      const entry = ensureStatsEntry(uid);
-      entry.tokens = tokens;
-      entry.weeklyTokens = weekly;
-      entry.streak = computeStreak(days);
-      renderFriendNetwork();
-    }
-  );
-
-  statSubs[uid] = { profileUnsub, tasksUnsub, tokensUnsub };
-}
-
-function unsubscribeFromUserStats(uid) {
-  if (!statSubs[uid]) return;
-  statSubs[uid].profileUnsub();
-  statSubs[uid].tasksUnsub();
-  statSubs[uid].tokensUnsub();
-  delete statSubs[uid];
-  delete networkStats[uid];
-}
-
-// Watches your own profile's "friends" array and keeps exactly the right
-// set of per-person listeners running — adds new friends automatically,
-// drops removed ones, no manual refresh needed.
-function startFriendNetworkListeners() {
-  if (friendsDocUnsubscribe) friendsDocUnsubscribe();
-  friendsDocUnsubscribe = onSnapshot(doc(db, "users", currentUid), (snap) => {
-    const friends = (snap.data() || {}).friends || [];
-    const wantedUids = [currentUid, ...friends];
-
-    Object.keys(statSubs).forEach((uid) => {
-      if (!wantedUids.includes(uid)) unsubscribeFromUserStats(uid);
-    });
-    wantedUids.forEach((uid) => subscribeToUserStats(uid));
-  });
-}
-
-function stopFriendNetworkListeners() {
-  if (friendsDocUnsubscribe) {
-    friendsDocUnsubscribe();
-    friendsDocUnsubscribe = null;
-  }
-  Object.keys(statSubs).forEach(unsubscribeFromUserStats);
-}
-
-function renderFriendNetwork() {
-  const entries = Object.entries(networkStats).map(([uid, s]) => ({ uid, ...s }));
-  if (entries.length === 0) return;
-
-  entries.sort((a, b) => b.tokens - a.tokens);
-  const topTokens = entries[0].tokens;
-
-  // --- Scoreboard tab ---
-  if (entries.length <= 1) {
-    scoreboardList.classList.add("hidden");
-    scoreboardEmpty.classList.remove("hidden");
-  } else {
-    scoreboardEmpty.classList.add("hidden");
-    scoreboardList.classList.remove("hidden");
-    const medals = ["🥇", "🥈", "🥉"];
-    scoreboardList.innerHTML = entries
-      .map((e, i) => {
-        const rank = medals[i] || `#${i + 1}`;
-        const pct = e.tasksTotal > 0 ? Math.round((e.tasksCompleted / e.tasksTotal) * 100) : 0;
-        const gap = topTokens - e.tokens;
-        const gapText = i === 0 ? "In the lead" : `${gap} behind`;
-        return `
-          <div class="scoreboard-row ${e.uid === currentUid ? "is-me" : ""}">
-            <span class="rank-badge">${rank}</span>
-            <img class="scoreboard-photo" src="${e.photo || "/icon-192.png"}" alt="" />
-            <div class="scoreboard-info">
-              <div class="scoreboard-name">${escapeHtml(e.name)}</div>
-              <div class="scoreboard-sub">${e.tasksCompleted} done · ${pct}% · 🔥${e.streak}</div>
-            </div>
-            <div class="scoreboard-tokens">
-              <span class="num">${e.tokens}</span>
-              <span class="gap">${gapText}</span>
-            </div>
-          </div>
-        `;
-      })
-      .join("");
-  }
-
-  // --- Friends tab ---
-  const friendEntries = entries.filter((e) => e.uid !== currentUid);
-  if (friendEntries.length === 0) {
-    friendsEmptyState.classList.remove("hidden");
-    friendsList.querySelectorAll(".friend-card").forEach((el) => el.remove());
-  } else {
-    friendsEmptyState.classList.add("hidden");
-    friendsList.querySelectorAll(".friend-card").forEach((el) => el.remove());
-    friendEntries.forEach((e) => {
-      const pct = e.tasksTotal > 0 ? Math.round((e.tasksCompleted / e.tasksTotal) * 100) : 0;
-      const remaining = Math.max(e.tasksTotal - e.tasksCompleted, 0);
-      const card = document.createElement("div");
-      card.className = "friend-card";
-      card.innerHTML = `
-        <div class="friend-card-top">
-          <img src="${e.photo || "/icon-192.png"}" alt="" />
-          <div class="friend-card-name">${escapeHtml(e.name)}</div>
-          <button class="friend-remove-btn" data-uid="${e.uid}" data-name="${escapeHtml(e.name)}">Remove</button>
-        </div>
-        <div class="friend-stat-grid">
-          <div class="friend-stat"><span class="num">${e.tokens}</span><span class="label">TOKENS</span></div>
-          <div class="friend-stat"><span class="num">${e.tasksCompleted}</span><span class="label">DONE</span></div>
-          <div class="friend-stat"><span class="num">${remaining}</span><span class="label">LEFT</span></div>
-          <div class="friend-stat"><span class="num">🔥${e.streak}</span><span class="label">STREAK</span></div>
-        </div>
-      `;
-      friendsList.appendChild(card);
-    });
-  }
-}
-
-function escapeHtml(str) {
-  const d = document.createElement("div");
-  d.textContent = str || "";
-  return d.innerHTML;
-}
-
-// --- Add Friend (Friends tab quick-add, independent of onboarding) ---
-addFriendToggle.addEventListener("click", () => {
-  addFriendError.textContent = "";
-  addFriendInput.value = "";
-  addFriendEntry.classList.toggle("hidden");
-});
-
-addFriendSubmit.addEventListener("click", async () => {
-  const code = addFriendInput.value.trim().toUpperCase();
-  addFriendError.textContent = "";
-  if (!code || !currentUid) {
-    addFriendError.textContent = "Please enter a code.";
-    return;
-  }
-
-  addFriendSubmit.disabled = true;
-  addFriendSubmit.textContent = "Adding…";
-
-  try {
-    const q = query(collection(db, "users"), where("referralCode", "==", code));
-    const snap = await getDocs(q);
-    if (snap.empty) {
-      addFriendError.textContent = "That code doesn't match any account.";
-    } else {
-      const friendDoc = snap.docs[0];
-      const friendUid = friendDoc.id;
-      if (friendUid === currentUid) {
-        addFriendError.textContent = "That's your own code.";
-      } else {
-        // Add each other symmetrically. Updating the friend's own doc is
-        // allowed by the rules ONLY for appending your own uid — nothing
-        // else on their profile is touchable this way.
-        await updateDoc(doc(db, "users", currentUid), { friends: arrayUnion(friendUid) });
-        await updateDoc(doc(db, "users", friendUid), { friends: arrayUnion(currentUid) });
-        addFriendInput.value = "";
-        addFriendEntry.classList.add("hidden");
-      }
-    }
-  } catch (err) {
-    console.error("Add friend error:", err);
-    addFriendError.textContent = "Something went wrong. Please try again.";
-  }
-
-  addFriendSubmit.disabled = false;
-  addFriendSubmit.textContent = "Add Friend";
-});
-
-// --- Remove Friend ---
-let pendingRemoveUid = null;
-
-friendsList.addEventListener("click", (e) => {
-  const btn = e.target.closest(".friend-remove-btn");
-  if (!btn) return;
-  pendingRemoveUid = btn.dataset.uid;
-  removeFriendName.textContent = `You'll stop seeing ${btn.dataset.name}'s progress and scoreboard.`;
-  removeFriendModal.classList.remove("hidden");
-});
-
-removeFriendCancel.addEventListener("click", () => {
-  removeFriendModal.classList.add("hidden");
-  pendingRemoveUid = null;
-});
-
-removeFriendConfirm.addEventListener("click", async () => {
-  removeFriendModal.classList.add("hidden");
-  if (!pendingRemoveUid || !currentUid) return;
-  const friendUid = pendingRemoveUid;
-  pendingRemoveUid = null;
-
-  try {
-    await updateDoc(doc(db, "users", currentUid), { friends: arrayRemove(friendUid) });
-    // Best-effort: also remove yourself from their list (rules permit only
-    // this exact self-removal on someone else's doc). If it fails for any
-    // reason your own view is already correctly updated regardless.
-    await updateDoc(doc(db, "users", friendUid), { friends: arrayRemove(currentUid) }).catch((err) => {
-      console.error("Could not remove self from friend's list:", err);
-    });
-  } catch (err) {
-    console.error("Remove friend failed:", err);
-    alert("Couldn't remove this friend. Please check your connection and try again.");
-  }
-});
 
 function updateProgressStats(todaysTasks) {
   const total = todaysTasks.length;
-  const done = todaysTasks.filter((t) => t.completed).length;
+  const done = todaysTasks.filter((t) => completedTodaySet.has(t.id)).length;
   const percent = total > 0 ? Math.round((done / total) * 100) : 0;
 
   statTasks.textContent = `${done}/${total}`;
@@ -903,14 +651,7 @@ redoCancel.addEventListener("click", () => {
 redoConfirm.addEventListener("click", async () => {
   redoModal.classList.add("hidden");
   if (!pendingRedo || !currentUid) return;
-  if (tasksUnsubscribe) {
-    tasksUnsubscribe();
-    tasksUnsubscribe = null;
-  }
-  if (tokenEventsUnsubscribe) {
-    tokenEventsUnsubscribe();
-    tokenEventsUnsubscribe = null;
-  }
+  stopTaskListeners();
   await updateDoc(doc(db, "users", currentUid), {
     startMethod: null,
     referredBy: null,
@@ -926,6 +667,236 @@ redoModal.addEventListener("click", (e) => {
     pendingRedo = false;
   }
 });
+
+// ============================================================
+// FRIEND DASHBOARD + SCOREBOARD (Phase 6)
+// ============================================================
+
+// Computes tokens / tasks-completed / today's-completion / streak for
+// any uid, using the token ledger as the source of truth (rather than
+// a "completed" field on the task itself, which can't correctly track
+// a daily-repeating task across multiple days).
+async function computeUserStats(uid) {
+  const [tasksSnap, eventsSnap] = await Promise.all([
+    getDocs(query(collection(db, "tasks"), where("ownerUid", "==", uid))),
+    getDocs(collection(db, "users", uid, "tokenEvents"))
+  ]);
+
+  const tasks = tasksSnap.docs.map((d) => d.data());
+  const events = eventsSnap.docs.map((d) => d.data());
+
+  const tokens = events.reduce((sum, e) => sum + (e.tokens || 0), 0);
+  const totalCompleted = events.length; // one event = one completion instance
+
+  const today = todayDayNumber();
+  const completedToday = events.filter((e) => e.dayNumber === today).length;
+
+  const todaysTasks = tasks.filter(isTaskActiveToday);
+  const percentToday = todaysTasks.length > 0
+    ? Math.round((completedToday / todaysTasks.length) * 100)
+    : 0;
+
+  // Streak: count consecutive day-numbers (ending today) that have at
+  // least one ledger event. Today is allowed to be "not yet done"
+  // without breaking the streak — it just doesn't count until it's done.
+  const eventDayNumbers = new Set(events.map((e) => e.dayNumber));
+  let streak = 0;
+  let cursor = today;
+  while (true) {
+    if (eventDayNumbers.has(cursor)) {
+      streak++;
+      cursor--;
+    } else if (cursor === today) {
+      cursor--; // skip today if not done yet
+    } else {
+      break;
+    }
+  }
+
+  return { tokens, totalCompleted, completedToday, percentToday, streak };
+}
+
+// --- Friends list (Friends tab) ---
+async function renderFriendsList() {
+  const friendUids = (currentUserProfile && currentUserProfile.friends) || [];
+
+  friendListEl.querySelectorAll(".friend-row").forEach((el) => el.remove());
+
+  if (friendUids.length === 0) {
+    friendListEmpty.classList.remove("hidden");
+    return;
+  }
+  friendListEmpty.classList.add("hidden");
+
+  for (const uid of friendUids) {
+    try {
+      const friendSnap = await getDoc(doc(db, "users", uid));
+      if (!friendSnap.exists()) continue;
+      const friendData = friendSnap.data();
+      const friendStats = await computeUserStats(uid);
+
+      const row = document.createElement("div");
+      row.className = "friend-row";
+      row.innerHTML = `
+        <img class="friend-photo" src="${friendData.photoURL || "/icon-192.png"}" alt="" />
+        <div class="friend-info">
+          <div class="friend-name">${escapeHtml(friendData.displayName || "Friend")}</div>
+          <div class="friend-sub">${friendStats.tokens} tokens</div>
+        </div>
+        <span class="friend-chevron">›</span>
+      `;
+      row.addEventListener("click", () => openFriendDashboard(uid, friendData));
+      friendListEl.appendChild(row);
+    } catch (err) {
+      console.error("Failed to load friend:", uid, err);
+    }
+  }
+}
+
+// --- Friend Dashboard (comparison view) ---
+async function openFriendDashboard(friendUid, friendData) {
+  viewingFriendUid = friendUid;
+
+  fdYouPhoto.src = userPhoto.src;
+  fdFriendPhoto.src = friendData.photoURL || "/icon-192.png";
+  fdFriendName.textContent = friendData.displayName || "Friend";
+
+  showScreen(friendDashboardScreen);
+
+  fdYouTokens.textContent = "…";
+  fdFriendTokens.textContent = "…";
+  fdYouCompleted.textContent = "…";
+  fdFriendCompleted.textContent = "…";
+
+  try {
+    const [youStats, friendStats] = await Promise.all([
+      computeUserStats(currentUid),
+      computeUserStats(friendUid)
+    ]);
+
+    fdYouTokens.textContent = youStats.tokens;
+    fdYouCompleted.textContent = youStats.totalCompleted;
+    fdYouToday.textContent = youStats.completedToday;
+    fdYouPercent.textContent = youStats.percentToday + "%";
+    fdYouStreak.textContent = youStats.streak;
+
+    fdFriendTokens.textContent = friendStats.tokens;
+    fdFriendCompleted.textContent = friendStats.totalCompleted;
+    fdFriendToday.textContent = friendStats.completedToday;
+    fdFriendPercent.textContent = friendStats.percentToday + "%";
+    fdFriendStreak.textContent = friendStats.streak;
+  } catch (err) {
+    console.error("Failed to load comparison stats:", err);
+  }
+}
+
+friendDashboardBack.addEventListener("click", () => {
+  viewingFriendUid = null;
+  showScreen(appShell);
+});
+
+// --- Remove friend ---
+friendRemoveBtn.addEventListener("click", () => {
+  removeFriendModal.classList.remove("hidden");
+});
+
+removeFriendCancel.addEventListener("click", () => {
+  removeFriendModal.classList.add("hidden");
+});
+
+removeFriendModal.addEventListener("click", (e) => {
+  if (e.target === removeFriendModal) removeFriendModal.classList.add("hidden");
+});
+
+removeFriendConfirm.addEventListener("click", async () => {
+  if (!viewingFriendUid || !currentUid) return;
+  removeFriendModal.classList.add("hidden");
+
+  try {
+    const myFriends = (currentUserProfile.friends || []).filter((id) => id !== viewingFriendUid);
+    await updateDoc(doc(db, "users", currentUid), { friends: myFriends });
+    currentUserProfile.friends = myFriends;
+
+    const friendRef = doc(db, "users", viewingFriendUid);
+    const friendSnap = await getDoc(friendRef);
+    if (friendSnap.exists()) {
+      const theirFriends = (friendSnap.data().friends || []).filter((id) => id !== currentUid);
+      await updateDoc(friendRef, { friends: theirFriends });
+    }
+
+    viewingFriendUid = null;
+    showScreen(appShell);
+    switchTab("friends");
+  } catch (err) {
+    console.error("Failed to remove friend:", err);
+  }
+});
+
+// --- Scoreboard (self + all friends, ranked by tokens) ---
+async function renderScoreboard() {
+  if (!currentUid || !currentUserProfile) return;
+
+  const friendUids = currentUserProfile.friends || [];
+
+  scoreboardListEl.querySelectorAll(".scoreboard-row").forEach((el) => el.remove());
+
+  if (friendUids.length === 0) {
+    scoreboardEmpty.classList.remove("hidden");
+    return;
+  }
+  scoreboardEmpty.classList.add("hidden");
+
+  const freshYou = await getDoc(doc(db, "users", currentUid));
+  const youData = freshYou.data();
+  const youStats = await computeUserStats(currentUid);
+
+  const entries = [{
+    uid: currentUid,
+    name: "You",
+    photoURL: youData.photoURL,
+    tokens: youStats.tokens,
+    completed: youStats.totalCompleted,
+    isYou: true
+  }];
+
+  for (const uid of friendUids) {
+    try {
+      const snap = await getDoc(doc(db, "users", uid));
+      if (!snap.exists()) continue;
+      const data = snap.data();
+      const stats = await computeUserStats(uid);
+      entries.push({
+        uid,
+        name: data.displayName || "Friend",
+        photoURL: data.photoURL,
+        tokens: stats.tokens,
+        completed: stats.totalCompleted,
+        isYou: false
+      });
+    } catch (err) {
+      console.error("Scoreboard friend load failed:", uid, err);
+    }
+  }
+
+  entries.sort((a, b) => b.tokens - a.tokens);
+
+  const medals = ["🥇", "🥈", "🥉"];
+  entries.forEach((entry, i) => {
+    const row = document.createElement("div");
+    row.className = "scoreboard-row" + (entry.isYou ? " is-you" : "");
+    const rankDisplay = medals[i] || `#${i + 1}`;
+    row.innerHTML = `
+      <span class="rank-badge">${rankDisplay}</span>
+      <img class="scoreboard-photo" src="${entry.photoURL || "/icon-192.png"}" alt="" />
+      <div class="scoreboard-info">
+        <div class="scoreboard-name">${escapeHtml(entry.name)}</div>
+        <div class="scoreboard-sub">${entry.completed} tasks completed</div>
+      </div>
+      <div class="scoreboard-tokens">${entry.tokens}</div>
+    `;
+    scoreboardListEl.appendChild(row);
+  });
+}
 
 // --- Central auth state listener ---
 showScreen(loadingScreen);
@@ -950,16 +921,8 @@ onAuthStateChanged(auth, async (user) => {
     }
   } else {
     currentUid = null;
-    if (tasksUnsubscribe) {
-      tasksUnsubscribe();
-      tasksUnsubscribe = null;
-    }
-    if (tokenEventsUnsubscribe) {
-      tokenEventsUnsubscribe();
-      tokenEventsUnsubscribe = null;
-    }
-    stopFriendNetworkListeners();
-    currentTokenTotal = 0;
+    currentUserProfile = null;
+    stopTaskListeners();
     showScreen(loginScreen);
     googleBtn.disabled = false;
   }
