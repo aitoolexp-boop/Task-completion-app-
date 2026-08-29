@@ -129,19 +129,34 @@
 
   <!-- TAB: SCOREBOARD -->
   <div class="tab-content hidden" id="tab-scoreboard">
-    <div class="placeholder-card">
-      <p>🏆 Scoreboard</p>
-      <p class="dim">Ranked friend comparisons arrive in Phase 6.</p>
+    <h3 class="section-title">🏆 Scoreboard</h3>
+    <div id="scoreboard-list" class="scoreboard-list">
+      <p class="dim empty-state" id="scoreboard-empty">Connect a friend to see the scoreboard.</p>
     </div>
   </div>
 
   <!-- TAB: FRIENDS -->
   <div class="tab-content hidden" id="tab-friends">
-    <div class="placeholder-card">
-      <p>👥 Friends</p>
-      <p class="dim">Your referral code:</p>
+    <h3 class="section-title">👥 Friends</h3>
+
+    <div class="placeholder-card" style="text-align:center; margin-bottom:20px;">
+      <p class="dim">Your referral code</p>
       <p class="referral-code-display" id="my-referral-code">—</p>
-      <p class="dim">Friend management arrives in Phase 6.</p>
+    </div>
+
+    <div class="dashboard-header-row">
+      <h4 class="section-title-inline">Connected Friends</h4>
+      <button class="link-btn small" id="add-friend-toggle">+ Add</button>
+    </div>
+
+    <div class="tab-view hidden" id="add-friend-entry" style="margin-bottom:16px;">
+      <input type="text" id="add-friend-input" class="text-input" placeholder="Friend's referral code" autocapitalize="characters" />
+      <button id="add-friend-submit" class="btn btn-primary">Add Friend</button>
+      <p class="note" id="add-friend-error"></p>
+    </div>
+
+    <div id="friends-list" class="task-list">
+      <p class="dim empty-state" id="friends-empty-state">No friends connected yet.</p>
     </div>
   </div>
 
@@ -240,6 +255,18 @@
       <button id="task-save" class="btn btn-primary">Save</button>
     </div>
     <button class="link-btn danger hidden" id="task-delete">Delete Task</button>
+  </div>
+</div>
+
+<!-- REMOVE FRIEND CONFIRMATION MODAL -->
+<div class="modal-overlay hidden" id="remove-friend-modal">
+  <div class="modal-box">
+    <h3>Remove this friend?</h3>
+    <p id="remove-friend-name">You'll stop seeing each other's progress and scoreboard.</p>
+    <div class="modal-actions">
+      <button id="remove-friend-cancel" class="btn btn-ghost">Cancel</button>
+      <button id="remove-friend-confirm" class="btn btn-danger">Remove</button>
+    </div>
   </div>
 </div>
 

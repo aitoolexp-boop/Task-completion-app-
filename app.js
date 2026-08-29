@@ -26,6 +26,8 @@ import {
   getDocs,
   onSnapshot,
   serverTimestamp,
+  arrayUnion,
+  arrayRemove,
   enableIndexedDbPersistence
 } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
 
@@ -80,6 +82,19 @@ const referralSubmit = document.getElementById("referral-submit");
 const referralError = document.getElementById("referral-error");
 const dashboardRedoBtn = document.getElementById("dashboard-redo");
 const myReferralCodeEl = document.getElementById("my-referral-code");
+const scoreboardList = document.getElementById("scoreboard-list");
+const scoreboardEmpty = document.getElementById("scoreboard-empty");
+const addFriendToggle = document.getElementById("add-friend-toggle");
+const addFriendEntry = document.getElementById("add-friend-entry");
+const addFriendInput = document.getElementById("add-friend-input");
+const addFriendSubmit = document.getElementById("add-friend-submit");
+const addFriendError = document.getElementById("add-friend-error");
+const friendsList = document.getElementById("friends-list");
+const friendsEmptyState = document.getElementById("friends-empty-state");
+const removeFriendModal = document.getElementById("remove-friend-modal");
+const removeFriendName = document.getElementById("remove-friend-name");
+const removeFriendCancel = document.getElementById("remove-friend-cancel");
+const removeFriendConfirm = document.getElementById("remove-friend-confirm");
 
 // --- DOM references: dashboard / tasks ---
 const statTasks = document.getElementById("stat-tasks");
@@ -224,6 +239,7 @@ function renderHomeForProfile(profile) {
     statTokens.textContent = currentTokenTotal;
     startTaskListener();
     startTokenListener();
+    startFriendNetworkListeners();
   } else {
     showHomeSubView(homeChoice);
   }
@@ -236,6 +252,7 @@ choiceOwnBtn.addEventListener("click", async () => {
   showHomeSubView(homeDashboard);
   startTaskListener();
   startTokenListener();
+  startFriendNetworkListeners();
 });
 
 // --- Choice: Referred by a Friend ---
@@ -293,18 +310,16 @@ referralSubmit.addEventListener("click", async () => {
 
     // Add each other to a simple "friends" array on both profiles
     await updateDoc(doc(db, "users", currentUid), {
-      friends: [friendUid]
+      friends: arrayUnion(friendUid)
     });
-    const friendRef = doc(db, "users", friendUid);
-    const friendSnap = await getDoc(friendRef);
-    const existingFriends = (friendSnap.data().friends) || [];
-    if (!existingFriends.includes(currentUid)) {
-      await updateDoc(friendRef, { friends: [...existingFriends, currentUid] });
-    }
+    await updateDoc(doc(db, "users", friendUid), {
+      friends: arrayUnion(currentUid)
+    });
 
     showHomeSubView(homeDashboard);
     startTaskListener();
     startTokenListener();
+    startFriendNetworkListeners();
   } catch (err) {
     console.error("Referral code error:", err);
     referralError.textContent = "Something went wrong. Please try again.";
@@ -463,6 +478,293 @@ function startTokenListener() {
     }
   );
 }
+
+// ============================================================
+// FRIEND NETWORK: live stats for yourself + every connected friend,
+// powering both the Scoreboard tab and the Friends tab. (Phase 6)
+// ============================================================
+
+let friendsDocUnsubscribe = null;
+let statSubs = {}; // uid -> { profileUnsub, tasksUnsub, tokensUnsub }
+let networkStats = {}; // uid -> { name, photo, tokens, tasksCompleted, tasksTotal, streak, weeklyTokens }
+
+function todayDayNumber() {
+  return Math.floor(Date.now() / 86400000);
+}
+
+// Streak = consecutive days with at least one completed task, counting
+// backward from today. If today has no completion yet, we still count
+// the streak as "alive" starting from yesterday, so it doesn't zero out
+// the moment the clock rolls over before you've had a chance to check in.
+function computeStreak(dayNumberSet) {
+  const today = todayDayNumber();
+  let cursor = dayNumberSet.has(today) ? today : today - 1;
+  let streak = 0;
+  while (dayNumberSet.has(cursor)) {
+    streak++;
+    cursor--;
+  }
+  return streak;
+}
+
+function ensureStatsEntry(uid) {
+  if (!networkStats[uid]) {
+    networkStats[uid] = {
+      name: uid === currentUid ? "You" : "Friend",
+      photo: "",
+      tokens: 0,
+      tasksCompleted: 0,
+      tasksTotal: 0,
+      streak: 0,
+      weeklyTokens: 0
+    };
+  }
+  return networkStats[uid];
+}
+
+function subscribeToUserStats(uid) {
+  if (statSubs[uid]) return; // already subscribed
+  ensureStatsEntry(uid);
+
+  const profileUnsub = onSnapshot(doc(db, "users", uid), (snap) => {
+    const d = snap.data() || {};
+    const entry = ensureStatsEntry(uid);
+    entry.name = uid === currentUid ? "You" : (d.displayName || "Friend");
+    entry.photo = d.photoURL || "";
+    renderFriendNetwork();
+  });
+
+  const tasksUnsub = onSnapshot(
+    query(collection(db, "tasks"), where("ownerUid", "==", uid)),
+    (snap) => {
+      let total = 0;
+      let completed = 0;
+      snap.forEach((d) => {
+        total++;
+        if (d.data().completed) completed++;
+      });
+      const entry = ensureStatsEntry(uid);
+      entry.tasksTotal = total;
+      entry.tasksCompleted = completed;
+      renderFriendNetwork();
+    }
+  );
+
+  const tokensUnsub = onSnapshot(
+    collection(db, "users", uid, "tokenEvents"),
+    (snap) => {
+      let tokens = 0;
+      let weekly = 0;
+      const days = new Set();
+      const today = todayDayNumber();
+      snap.forEach((d) => {
+        const v = d.data();
+        tokens += v.tokens || 0;
+        days.add(v.dayNumber);
+        if (v.dayNumber >= today - 6) weekly += v.tokens || 0;
+      });
+      const entry = ensureStatsEntry(uid);
+      entry.tokens = tokens;
+      entry.weeklyTokens = weekly;
+      entry.streak = computeStreak(days);
+      renderFriendNetwork();
+    }
+  );
+
+  statSubs[uid] = { profileUnsub, tasksUnsub, tokensUnsub };
+}
+
+function unsubscribeFromUserStats(uid) {
+  if (!statSubs[uid]) return;
+  statSubs[uid].profileUnsub();
+  statSubs[uid].tasksUnsub();
+  statSubs[uid].tokensUnsub();
+  delete statSubs[uid];
+  delete networkStats[uid];
+}
+
+// Watches your own profile's "friends" array and keeps exactly the right
+// set of per-person listeners running — adds new friends automatically,
+// drops removed ones, no manual refresh needed.
+function startFriendNetworkListeners() {
+  if (friendsDocUnsubscribe) friendsDocUnsubscribe();
+  friendsDocUnsubscribe = onSnapshot(doc(db, "users", currentUid), (snap) => {
+    const friends = (snap.data() || {}).friends || [];
+    const wantedUids = [currentUid, ...friends];
+
+    Object.keys(statSubs).forEach((uid) => {
+      if (!wantedUids.includes(uid)) unsubscribeFromUserStats(uid);
+    });
+    wantedUids.forEach((uid) => subscribeToUserStats(uid));
+  });
+}
+
+function stopFriendNetworkListeners() {
+  if (friendsDocUnsubscribe) {
+    friendsDocUnsubscribe();
+    friendsDocUnsubscribe = null;
+  }
+  Object.keys(statSubs).forEach(unsubscribeFromUserStats);
+}
+
+function renderFriendNetwork() {
+  const entries = Object.entries(networkStats).map(([uid, s]) => ({ uid, ...s }));
+  if (entries.length === 0) return;
+
+  entries.sort((a, b) => b.tokens - a.tokens);
+  const topTokens = entries[0].tokens;
+
+  // --- Scoreboard tab ---
+  if (entries.length <= 1) {
+    scoreboardList.classList.add("hidden");
+    scoreboardEmpty.classList.remove("hidden");
+  } else {
+    scoreboardEmpty.classList.add("hidden");
+    scoreboardList.classList.remove("hidden");
+    const medals = ["🥇", "🥈", "🥉"];
+    scoreboardList.innerHTML = entries
+      .map((e, i) => {
+        const rank = medals[i] || `#${i + 1}`;
+        const pct = e.tasksTotal > 0 ? Math.round((e.tasksCompleted / e.tasksTotal) * 100) : 0;
+        const gap = topTokens - e.tokens;
+        const gapText = i === 0 ? "In the lead" : `${gap} behind`;
+        return `
+          <div class="scoreboard-row ${e.uid === currentUid ? "is-me" : ""}">
+            <span class="rank-badge">${rank}</span>
+            <img class="scoreboard-photo" src="${e.photo || "/icon-192.png"}" alt="" />
+            <div class="scoreboard-info">
+              <div class="scoreboard-name">${escapeHtml(e.name)}</div>
+              <div class="scoreboard-sub">${e.tasksCompleted} done · ${pct}% · 🔥${e.streak}</div>
+            </div>
+            <div class="scoreboard-tokens">
+              <span class="num">${e.tokens}</span>
+              <span class="gap">${gapText}</span>
+            </div>
+          </div>
+        `;
+      })
+      .join("");
+  }
+
+  // --- Friends tab ---
+  const friendEntries = entries.filter((e) => e.uid !== currentUid);
+  if (friendEntries.length === 0) {
+    friendsEmptyState.classList.remove("hidden");
+    friendsList.querySelectorAll(".friend-card").forEach((el) => el.remove());
+  } else {
+    friendsEmptyState.classList.add("hidden");
+    friendsList.querySelectorAll(".friend-card").forEach((el) => el.remove());
+    friendEntries.forEach((e) => {
+      const pct = e.tasksTotal > 0 ? Math.round((e.tasksCompleted / e.tasksTotal) * 100) : 0;
+      const remaining = Math.max(e.tasksTotal - e.tasksCompleted, 0);
+      const card = document.createElement("div");
+      card.className = "friend-card";
+      card.innerHTML = `
+        <div class="friend-card-top">
+          <img src="${e.photo || "/icon-192.png"}" alt="" />
+          <div class="friend-card-name">${escapeHtml(e.name)}</div>
+          <button class="friend-remove-btn" data-uid="${e.uid}" data-name="${escapeHtml(e.name)}">Remove</button>
+        </div>
+        <div class="friend-stat-grid">
+          <div class="friend-stat"><span class="num">${e.tokens}</span><span class="label">TOKENS</span></div>
+          <div class="friend-stat"><span class="num">${e.tasksCompleted}</span><span class="label">DONE</span></div>
+          <div class="friend-stat"><span class="num">${remaining}</span><span class="label">LEFT</span></div>
+          <div class="friend-stat"><span class="num">🔥${e.streak}</span><span class="label">STREAK</span></div>
+        </div>
+      `;
+      friendsList.appendChild(card);
+    });
+  }
+}
+
+function escapeHtml(str) {
+  const d = document.createElement("div");
+  d.textContent = str || "";
+  return d.innerHTML;
+}
+
+// --- Add Friend (Friends tab quick-add, independent of onboarding) ---
+addFriendToggle.addEventListener("click", () => {
+  addFriendError.textContent = "";
+  addFriendInput.value = "";
+  addFriendEntry.classList.toggle("hidden");
+});
+
+addFriendSubmit.addEventListener("click", async () => {
+  const code = addFriendInput.value.trim().toUpperCase();
+  addFriendError.textContent = "";
+  if (!code || !currentUid) {
+    addFriendError.textContent = "Please enter a code.";
+    return;
+  }
+
+  addFriendSubmit.disabled = true;
+  addFriendSubmit.textContent = "Adding…";
+
+  try {
+    const q = query(collection(db, "users"), where("referralCode", "==", code));
+    const snap = await getDocs(q);
+    if (snap.empty) {
+      addFriendError.textContent = "That code doesn't match any account.";
+    } else {
+      const friendDoc = snap.docs[0];
+      const friendUid = friendDoc.id;
+      if (friendUid === currentUid) {
+        addFriendError.textContent = "That's your own code.";
+      } else {
+        // Add each other symmetrically. Updating the friend's own doc is
+        // allowed by the rules ONLY for appending your own uid — nothing
+        // else on their profile is touchable this way.
+        await updateDoc(doc(db, "users", currentUid), { friends: arrayUnion(friendUid) });
+        await updateDoc(doc(db, "users", friendUid), { friends: arrayUnion(currentUid) });
+        addFriendInput.value = "";
+        addFriendEntry.classList.add("hidden");
+      }
+    }
+  } catch (err) {
+    console.error("Add friend error:", err);
+    addFriendError.textContent = "Something went wrong. Please try again.";
+  }
+
+  addFriendSubmit.disabled = false;
+  addFriendSubmit.textContent = "Add Friend";
+});
+
+// --- Remove Friend ---
+let pendingRemoveUid = null;
+
+friendsList.addEventListener("click", (e) => {
+  const btn = e.target.closest(".friend-remove-btn");
+  if (!btn) return;
+  pendingRemoveUid = btn.dataset.uid;
+  removeFriendName.textContent = `You'll stop seeing ${btn.dataset.name}'s progress and scoreboard.`;
+  removeFriendModal.classList.remove("hidden");
+});
+
+removeFriendCancel.addEventListener("click", () => {
+  removeFriendModal.classList.add("hidden");
+  pendingRemoveUid = null;
+});
+
+removeFriendConfirm.addEventListener("click", async () => {
+  removeFriendModal.classList.add("hidden");
+  if (!pendingRemoveUid || !currentUid) return;
+  const friendUid = pendingRemoveUid;
+  pendingRemoveUid = null;
+
+  try {
+    await updateDoc(doc(db, "users", currentUid), { friends: arrayRemove(friendUid) });
+    // Best-effort: also remove yourself from their list (rules permit only
+    // this exact self-removal on someone else's doc). If it fails for any
+    // reason your own view is already correctly updated regardless.
+    await updateDoc(doc(db, "users", friendUid), { friends: arrayRemove(currentUid) }).catch((err) => {
+      console.error("Could not remove self from friend's list:", err);
+    });
+  } catch (err) {
+    console.error("Remove friend failed:", err);
+    alert("Couldn't remove this friend. Please check your connection and try again.");
+  }
+});
 
 function updateProgressStats(todaysTasks) {
   const total = todaysTasks.length;
@@ -656,6 +958,7 @@ onAuthStateChanged(auth, async (user) => {
       tokenEventsUnsubscribe();
       tokenEventsUnsubscribe = null;
     }
+    stopFriendNetworkListeners();
     currentTokenTotal = 0;
     showScreen(loginScreen);
     googleBtn.disabled = false;
