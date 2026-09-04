@@ -3,7 +3,7 @@
 // immediately instead of being stuck on old cached code. Icons still
 // cache normally since they rarely change.
 
-const CACHE_NAME = "goalsync-shell-v7";
+const CACHE_NAME = "goalsync-shell-v8";
 
 const APP_SHELL = [
   "/icon-192.png",

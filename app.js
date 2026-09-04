@@ -132,10 +132,6 @@ const fdYouPercent = document.getElementById("fd-you-percent");
 const fdFriendPercent = document.getElementById("fd-friend-percent");
 const fdYouStreak = document.getElementById("fd-you-streak");
 const fdFriendStreak = document.getElementById("fd-friend-streak");
-const friendRemoveBtn = document.getElementById("friend-remove-btn");
-const removeFriendModal = document.getElementById("remove-friend-modal");
-const removeFriendCancel = document.getElementById("remove-friend-cancel");
-const removeFriendConfirm = document.getElementById("remove-friend-confirm");
 
 let currentUid = null;
 let currentUserProfile = null;
@@ -238,9 +234,23 @@ async function loadUserProfile(user) {
       referralCode,
       startMethod: null,
       referredBy: null,
+      roomOwnerUid: null,
       createdAt: serverTimestamp()
     };
     await setDoc(userRef, profile);
+  }
+
+  // Self-heal: accounts created before the "room" model won't have
+  // roomOwnerUid set yet. Infer it from their existing startMethod so
+  // they don't have to redo setup just because of this upgrade.
+  if (profile.roomOwnerUid === undefined || profile.roomOwnerUid === null) {
+    let inferred = null;
+    if (profile.startMethod === "own") inferred = user.uid;
+    else if (profile.startMethod === "referred" && profile.referredBy) inferred = profile.referredBy;
+    if (inferred) {
+      await updateDoc(userRef, { roomOwnerUid: inferred });
+      profile.roomOwnerUid = inferred;
+    }
   }
 
   myReferralCodeEl.textContent = profile.referralCode || "—";
@@ -252,17 +262,36 @@ function renderHomeForProfile(profile) {
   if (profile.startMethod === "own" || profile.startMethod === "referred") {
     showHomeSubView(homeDashboard);
     statTokens.textContent = "…"; // the token ledger listener fills this in
+    updateTaskPermissionsUI();
     startTaskListener();
   } else {
     showHomeSubView(homeChoice);
   }
 }
 
+// Shows/hides the "+" add-task button and lets you tap a task to edit
+// it — both only for the room owner. Everyone else in the room sees
+// the same shared checklist but can only check things off, not edit
+// what's on it.
+function updateTaskPermissionsUI() {
+  const isOwner = currentUserProfile && currentUserProfile.roomOwnerUid === currentUid;
+  if (isOwner) {
+    addTaskFab.classList.remove("hidden");
+    taskEmptyState.textContent = "No tasks yet. Tap + to add one.";
+  } else {
+    addTaskFab.classList.add("hidden");
+    taskEmptyState.textContent = "No tasks yet — the room owner hasn't added any.";
+  }
+}
+
 // --- Choice: Make Your Own ---
 choiceOwnBtn.addEventListener("click", async () => {
   if (!currentUid) return;
-  await updateDoc(doc(db, "users", currentUid), { startMethod: "own" });
+  await updateDoc(doc(db, "users", currentUid), { startMethod: "own", roomOwnerUid: currentUid });
+  currentUserProfile.startMethod = "own";
+  currentUserProfile.roomOwnerUid = currentUid;
   showHomeSubView(homeDashboard);
+  updateTaskPermissionsUI();
   startTaskListener();
 });
 
@@ -312,25 +341,29 @@ referralSubmit.addEventListener("click", async () => {
       return;
     }
 
-    // Link the accounts: update this user, and notify the friend
+    // A code can only be used to join a room if it belongs to the
+    // room's actual owner (someone who chose "Make Your Own"). This
+    // keeps everyone who joins via the same code in one shared group,
+    // instead of splintering into separate pairs.
+    if (friendData.roomOwnerUid !== friendUid) {
+      referralError.textContent = "That code doesn't belong to a room owner. Ask them for the code from whoever originally chose \"Make Your Own.\"";
+      referralSubmit.disabled = false;
+      referralSubmit.textContent = "Submit";
+      return;
+    }
+
     await updateDoc(doc(db, "users", currentUid), {
       startMethod: "referred",
       referredBy: friendUid,
-      referredByName: friendData.displayName || "a friend"
+      referredByName: friendData.displayName || "a friend",
+      roomOwnerUid: friendUid
     });
-
-    // Add each other to a simple "friends" array on both profiles
-    await updateDoc(doc(db, "users", currentUid), {
-      friends: [friendUid]
-    });
-    const friendRef = doc(db, "users", friendUid);
-    const friendSnap = await getDoc(friendRef);
-    const existingFriends = (friendSnap.data().friends) || [];
-    if (!existingFriends.includes(currentUid)) {
-      await updateDoc(friendRef, { friends: [...existingFriends, currentUid] });
-    }
+    currentUserProfile.startMethod = "referred";
+    currentUserProfile.referredBy = friendUid;
+    currentUserProfile.roomOwnerUid = friendUid;
 
     showHomeSubView(homeDashboard);
+    updateTaskPermissionsUI();
     startTaskListener();
   } catch (err) {
     console.error("Referral code error:", err);
@@ -351,15 +384,29 @@ referralSubmit.addEventListener("click", async () => {
 // ============================================================
 
 function todayStr() {
+  // Local calendar date (not UTC) — so a task's start/end range lines
+  // up with what "today" means to the person actually using the app.
   const d = new Date();
-  return d.toISOString().slice(0, 10); // YYYY-MM-DD
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
-// Must match the server's day-number logic in firestore.rules
-// (int(request.time.toMillis() / 86400000)) so a completion made
-// "today" on the client is accepted as "today" by the rules.
+// JS convention: getTimezoneOffset() is UTC-minus-local, in minutes
+// (e.g. +300 for US Eastern, -330 for India). We send this along with
+// every ledger write so the security rule can independently compute
+// the same local day number the device sees — meaning tasks reset at
+// each person's own local midnight, not a shared UTC midnight. The
+// rule clamps this to a real-world range so it can only ever shift
+// the day boundary, never let someone claim a wildly different day.
+function getTzOffsetMinutes() {
+  return new Date().getTimezoneOffset();
+}
+
 function todayDayNumber() {
-  return Math.floor(Date.now() / 86400000);
+  const offsetMs = getTzOffsetMinutes() * 60000;
+  return Math.floor((Date.now() - offsetMs) / 86400000);
 }
 
 // A task is "active today" if today falls within its start/end range
@@ -377,7 +424,10 @@ let tokenEventsUnsubscribe = null;
 
 function startTaskListener() {
   if (tasksUnsubscribe) tasksUnsubscribe();
-  const q = query(collection(db, "tasks"), where("ownerUid", "==", currentUid));
+  // Everyone in a room sees the SAME shared checklist — the one set by
+  // the room owner — not just their own individually-created tasks.
+  const myRoomOwnerUid = currentUserProfile.roomOwnerUid || currentUid;
+  const q = query(collection(db, "tasks"), where("ownerUid", "==", myRoomOwnerUid));
   tasksUnsubscribe = onSnapshot(
     q,
     (snap) => {
@@ -459,7 +509,10 @@ function buildTaskRow(task) {
       ${task.required ? `<span class="task-tag">Required</span>` : `<span class="task-tag">Optional</span>`}
     </div>
   `;
-  info.addEventListener("click", () => openTaskModal(task));
+  info.addEventListener("click", () => {
+    const isOwner = currentUserProfile && currentUserProfile.roomOwnerUid === currentUid;
+    if (isOwner) openTaskModal(task);
+  });
 
   const tokens = document.createElement("div");
   tokens.className = "task-tokens";
@@ -498,6 +551,7 @@ async function toggleTaskComplete(task) {
       await setDoc(eventRef, {
         taskId: task.id,
         dayNumber: dayNum,
+        tzOffsetMinutes: getTzOffsetMinutes(),
         tokens: task.tokens || 0,
         createdAt: serverTimestamp()
       });
@@ -569,6 +623,10 @@ taskModal.addEventListener("click", (e) => {
 });
 
 taskSaveBtn.addEventListener("click", async () => {
+  if (!currentUserProfile || currentUserProfile.roomOwnerUid !== currentUid) {
+    taskFormError.textContent = "Only the room owner can add or edit tasks.";
+    return;
+  }
   const name = taskNameInput.value.trim();
   if (!name) {
     taskFormError.textContent = "Task name is required.";
@@ -655,8 +713,12 @@ redoConfirm.addEventListener("click", async () => {
   await updateDoc(doc(db, "users", currentUid), {
     startMethod: null,
     referredBy: null,
-    referredByName: null
+    referredByName: null,
+    roomOwnerUid: null
   });
+  currentUserProfile.startMethod = null;
+  currentUserProfile.referredBy = null;
+  currentUserProfile.roomOwnerUid = null;
   showHomeSubView(homeChoice);
   pendingRedo = false;
 });
@@ -677,8 +739,11 @@ redoModal.addEventListener("click", (e) => {
 // a "completed" field on the task itself, which can't correctly track
 // a daily-repeating task across multiple days).
 async function computeUserStats(uid) {
+  const profileSnap = await getDoc(doc(db, "users", uid));
+  const roomOwnerUid = (profileSnap.exists() && profileSnap.data().roomOwnerUid) || uid;
+
   const [tasksSnap, eventsSnap] = await Promise.all([
-    getDocs(query(collection(db, "tasks"), where("ownerUid", "==", uid))),
+    getDocs(query(collection(db, "tasks"), where("ownerUid", "==", roomOwnerUid))),
     getDocs(collection(db, "users", uid, "tokenEvents"))
   ]);
 
@@ -717,21 +782,29 @@ async function computeUserStats(uid) {
 }
 
 // --- Friends list (Friends tab) ---
+// --- Friends tab: everyone who shares your room (same roomOwnerUid) ---
 async function renderFriendsList() {
-  const friendUids = (currentUserProfile && currentUserProfile.friends) || [];
-
   friendListEl.querySelectorAll(".friend-row").forEach((el) => el.remove());
 
-  if (friendUids.length === 0) {
+  const myRoomOwnerUid = currentUserProfile && currentUserProfile.roomOwnerUid;
+  if (!myRoomOwnerUid) {
     friendListEmpty.classList.remove("hidden");
     return;
   }
-  friendListEmpty.classList.add("hidden");
 
-  for (const uid of friendUids) {
-    try {
-      const friendSnap = await getDoc(doc(db, "users", uid));
-      if (!friendSnap.exists()) continue;
+  try {
+    const q = query(collection(db, "users"), where("roomOwnerUid", "==", myRoomOwnerUid));
+    const snap = await getDocs(q);
+    const roommates = snap.docs.filter((d) => d.id !== currentUid);
+
+    if (roommates.length === 0) {
+      friendListEmpty.classList.remove("hidden");
+      return;
+    }
+    friendListEmpty.classList.add("hidden");
+
+    for (const friendSnap of roommates) {
+      const uid = friendSnap.id;
       const friendData = friendSnap.data();
       const friendStats = await computeUserStats(uid);
 
@@ -740,16 +813,16 @@ async function renderFriendsList() {
       row.innerHTML = `
         <img class="friend-photo" src="${friendData.photoURL || "/icon-192.png"}" alt="" />
         <div class="friend-info">
-          <div class="friend-name">${escapeHtml(friendData.displayName || "Friend")}</div>
+          <div class="friend-name">${escapeHtml(friendData.displayName || "Friend")}${uid === myRoomOwnerUid ? " (room owner)" : ""}</div>
           <div class="friend-sub">${friendStats.tokens} tokens</div>
         </div>
         <span class="friend-chevron">›</span>
       `;
       row.addEventListener("click", () => openFriendDashboard(uid, friendData));
       friendListEl.appendChild(row);
-    } catch (err) {
-      console.error("Failed to load friend:", uid, err);
     }
+  } catch (err) {
+    console.error("Failed to load room members:", err);
   }
 }
 
@@ -795,86 +868,39 @@ friendDashboardBack.addEventListener("click", () => {
   showScreen(appShell);
 });
 
-// --- Remove friend ---
-friendRemoveBtn.addEventListener("click", () => {
-  removeFriendModal.classList.remove("hidden");
-});
-
-removeFriendCancel.addEventListener("click", () => {
-  removeFriendModal.classList.add("hidden");
-});
-
-removeFriendModal.addEventListener("click", (e) => {
-  if (e.target === removeFriendModal) removeFriendModal.classList.add("hidden");
-});
-
-removeFriendConfirm.addEventListener("click", async () => {
-  if (!viewingFriendUid || !currentUid) return;
-  removeFriendModal.classList.add("hidden");
-
-  try {
-    const myFriends = (currentUserProfile.friends || []).filter((id) => id !== viewingFriendUid);
-    await updateDoc(doc(db, "users", currentUid), { friends: myFriends });
-    currentUserProfile.friends = myFriends;
-
-    const friendRef = doc(db, "users", viewingFriendUid);
-    const friendSnap = await getDoc(friendRef);
-    if (friendSnap.exists()) {
-      const theirFriends = (friendSnap.data().friends || []).filter((id) => id !== currentUid);
-      await updateDoc(friendRef, { friends: theirFriends });
-    }
-
-    viewingFriendUid = null;
-    showScreen(appShell);
-    switchTab("friends");
-  } catch (err) {
-    console.error("Failed to remove friend:", err);
-  }
-});
-
-// --- Scoreboard (self + all friends, ranked by tokens) ---
+// --- Scoreboard (everyone in the room, ranked by tokens) ---
 async function renderScoreboard() {
   if (!currentUid || !currentUserProfile) return;
 
-  const friendUids = currentUserProfile.friends || [];
+  const myRoomOwnerUid = currentUserProfile.roomOwnerUid;
 
   scoreboardListEl.querySelectorAll(".scoreboard-row").forEach((el) => el.remove());
 
-  if (friendUids.length === 0) {
+  if (!myRoomOwnerUid) {
     scoreboardEmpty.classList.remove("hidden");
     return;
   }
   scoreboardEmpty.classList.add("hidden");
 
-  const freshYou = await getDoc(doc(db, "users", currentUid));
-  const youData = freshYou.data();
-  const youStats = await computeUserStats(currentUid);
+  const q = query(collection(db, "users"), where("roomOwnerUid", "==", myRoomOwnerUid));
+  const snap = await getDocs(q);
 
-  const entries = [{
-    uid: currentUid,
-    name: "You",
-    photoURL: youData.photoURL,
-    tokens: youStats.tokens,
-    completed: youStats.totalCompleted,
-    isYou: true
-  }];
-
-  for (const uid of friendUids) {
+  const entries = [];
+  for (const memberSnap of snap.docs) {
+    const uid = memberSnap.id;
+    const data = memberSnap.data();
     try {
-      const snap = await getDoc(doc(db, "users", uid));
-      if (!snap.exists()) continue;
-      const data = snap.data();
       const stats = await computeUserStats(uid);
       entries.push({
         uid,
-        name: data.displayName || "Friend",
+        name: uid === currentUid ? "You" : (data.displayName || "Friend"),
         photoURL: data.photoURL,
         tokens: stats.tokens,
         completed: stats.totalCompleted,
-        isYou: false
+        isYou: uid === currentUid
       });
     } catch (err) {
-      console.error("Scoreboard friend load failed:", uid, err);
+      console.error("Scoreboard member load failed:", uid, err);
     }
   }
 
