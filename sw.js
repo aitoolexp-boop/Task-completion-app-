@@ -1,20 +1,33 @@
 // Service Worker for GoalSync PWA
-// v2 — switched to NETWORK-FIRST for app shell files so updates show up
-// immediately instead of being stuck on old cached code. Icons still
-// cache normally since they rarely change.
+// v3 — icon pre-caching is now resilient: previously, cache.addAll()
+// would fail COMPLETELY if even one icon file was missing/renamed,
+// which meant the whole service worker failed to install — and a
+// working service worker is required for "Add to Home Screen" to be
+// offered at all. Now each icon is fetched independently, so one bad
+// file can't take down installability for the whole app.
 
-const CACHE_NAME = "goalsync-shell-v8";
+const CACHE_NAME = "goalsync-shell-v9";
 
 const APP_SHELL = [
   "/icon-192.png",
-  "/icon-512.png"
+  "/icon-512.png",
+  "/icon-maskable-192.png",
+  "/icon-maskable-512.png"
 ];
 
-// Install: pre-cache only the rarely-changing assets (icons)
-self.addEventListener("install", (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL))
+async function precacheAppShell(cache) {
+  await Promise.all(
+    APP_SHELL.map((url) =>
+      cache.add(url).catch((err) => {
+        console.warn("Could not precache (will still work, just uncached):", url, err);
+      })
+    )
   );
+}
+
+// Install: pre-cache the rarely-changing assets (icons)
+self.addEventListener("install", (event) => {
+  event.waitUntil(caches.open(CACHE_NAME).then(precacheAppShell));
   self.skipWaiting();
 });
 
@@ -22,9 +35,9 @@ self.addEventListener("install", (event) => {
 // stale HTML/JS can never be served again
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.map((key) => caches.delete(key)))
-    ).then(() => caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)))
+    caches.keys()
+      .then((keys) => Promise.all(keys.map((key) => caches.delete(key))))
+      .then(() => caches.open(CACHE_NAME).then(precacheAppShell))
   );
   self.clients.claim();
 });
